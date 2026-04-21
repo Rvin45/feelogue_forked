@@ -1,0 +1,40 @@
+# Credentials & secrets
+.env
+key-*.json
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+**/.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# ===== Unity =====
+interaction-manager/[Ll]ibrary/
+interaction-manager/[Tt]emp/
+interaction-manager/[Oo]bj/
+interaction-manager/[Bb]uild/
+interaction-manager/[Bb]uilds/
+interaction-manager/[Ll]ogs/
+interaction-manager/[Uu]ser[Ss]ettings/
+interaction-manager/[Mm]emory[Cc]aptures/
+
+# IDE / solution files
+*.csproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.userprefs
+.idea/
+.vs/
+ExportedObj/
+
+# Large third-party source
+interaction-manager/liblouis/
+
+# NuGet package cache
+interaction-manager/Packages/*/
