@@ -35,7 +35,7 @@ Query: "{user_query}"
 
 Return JSON with two fields:
 1. "intent" - a dictionary of one or more of:
-   - load_chart: requests to load, display, plot, or switch to a dataset or chart (e.g., "show the sales chart", "load GPU prices", "display the bar chart")
+   - load_chart: requests or command to load, display, plot, or switch to a dataset or chart (e.g., "show the sales chart", "load GPU prices", "display the bar chart")
 
    - chart_overview: requests a high-level description or summary of the CURRENTLY LOADED chart (e.g., "what does this show?", "describe this chart", "what am I looking at?"). MUST be broad and summary-level. Do NOT use for questions about specific elements (e.g., "first line", "this bar", "highest point") — those belong to image_analysis or data_analysis.
 
