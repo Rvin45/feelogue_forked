@@ -7,7 +7,8 @@ import ssl
 import time
 import paho.mqtt.client as mqtt_client
 
-from .context import agent_context, update_dataframe_from_layer
+from .context import update_dataframe_from_layer, get_current_config
+from .graph import graph
 from .orchestrator import process_user_request
 from .config import (
     MQTT_HOST,
@@ -27,51 +28,52 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode('utf-8', errors='ignore').strip()
     print(f"\nReceived: {payload[:200]}...")
 
-    # Quick exit hook
     if payload.strip().lower() in ('exit.', 'stop.', 'quit.'):
         print("Exiting...")
         client.disconnect()
         return
 
-    # Parse JSON
     try:
         data = json.loads(payload)
     except json.JSONDecodeError:
         print("Invalid JSON format in message.")
         return
 
-    # Handle chart metadata boot message
+    # Chart metadata index (boot message from Unity)
     if "chart_metadata_index" in data:
-        agent_context["chart_metadata_index"] = data["chart_metadata_index"]
+        graph.update_state(
+            get_current_config(),
+            {"chart_metadata_index": data["chart_metadata_index"]},
+        )
         print("Chart metadata index registered")
         return
 
-    # Handle layer data update
+    # Layer data update -- builds DataFrame and pushes metadata into graph state
     if data.get("message_type") == "layer_data_update":
-        update_dataframe_from_layer(data)
+        update_dataframe_from_layer(data)  # also calls graph.update_state internally
         return
 
-    # Handle RTD data (chart metadata + image from renderer)
+    # RTD data (chart metadata + optional screenshot from renderer)
     if "rtd_data_for_agent" in data:
         rtd_data = data["rtd_data_for_agent"]
-        agent_context["chart_type"] = rtd_data.get("chart_type")
-        agent_context["data_name"] = rtd_data.get("data_name")
-        agent_context["image_data"] = rtd_data.get("image_data")
-        agent_context["image_format"] = rtd_data.get("image_format")
-
-        # Extract schema-level color field and pre-built overview if present
+        patch = {
+            "chart_type":  rtd_data.get("chart_type"),
+            "data_name":   rtd_data.get("data_name"),
+            "image_data":  rtd_data.get("image_data"),
+            "image_format": rtd_data.get("image_format"),
+        }
         schema = rtd_data.get("schema") or {}
         encoding = schema.get("encoding") or {}
-        color_encoding = encoding.get("color") or {}
-        agent_context["color_field"] = color_encoding.get("field") or None
+        patch["color_field"] = (encoding.get("color") or {}).get("field") or None
         overview = schema.get("overview")
         if overview:
-            agent_context["chart_overview"] = overview
+            patch["chart_overview"] = overview
 
+        graph.update_state(get_current_config(), patch)
         print(f"RTD data registered: chart_type={rtd_data.get('chart_type')}, data_name={rtd_data.get('data_name')}")
         return
 
-    # Handle user request
+    # User request
     if "user_request_for_agent" in data:
         try:
             result = process_user_request(payload)
@@ -121,7 +123,6 @@ def publish_message(
         payload["agent_response_for_user"]["referents"] = referents
 
     response_json = json.dumps(payload)
-
     info = _mqtt_client.publish(MQTT_TOPIC_OUT, response_json, qos=1, retain=False)
     status = getattr(info, "rc", None)
 
@@ -132,7 +133,6 @@ def publish_message(
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
-    """Handle MQTT connection."""
     if reason_code == 0 or str(reason_code) == "Success":
         print("Connected to MQTT broker")
         client.subscribe(MQTT_TOPIC_IN)
@@ -142,7 +142,6 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
-    """Handle MQTT disconnection."""
     if reason_code == 0:
         print("Disconnected from MQTT broker cleanly.")
     else:
@@ -150,7 +149,6 @@ def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
 
 
 def create_mqtt_client() -> mqtt_client.Client:
-    """Create and configure MQTT client."""
     global _mqtt_client
 
     client_id = f'python-agent-{random.randint(0, 1000)}'
@@ -161,7 +159,6 @@ def create_mqtt_client() -> mqtt_client.Client:
 
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
     client.tls_set(tls_version=ssl.PROTOCOL_TLS)
-    # Exponential backoff: wait 1s after first disconnect, up to 60s between retries
     client.reconnect_delay_set(min_delay=1, max_delay=60)
 
     client.on_connect = on_connect
@@ -176,7 +173,6 @@ def run():
     """Start the MQTT client loop."""
     client = create_mqtt_client()
 
-    # Retry initial connection with backoff — broker may not be ready yet
     retry_delay = 1
     while True:
         try:
@@ -190,8 +186,6 @@ def run():
 
     print("Starting message loop. Press Ctrl+C to exit.")
     try:
-        # loop_forever() handles mid-session reconnects automatically
-        # using the reconnect_delay_set backoff configured above
         client.loop_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")

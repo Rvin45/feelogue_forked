@@ -5,14 +5,26 @@ from langchain_openai import ChatOpenAI
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.tools import tool
 
-from .context import agent_context
 from .config import OPENAI_MODEL_ANALYSIS
 from .prompts import get_data_query_prefix
 
 # LLM for CSV/data queries - temperature=0 for reliable tool-call compliance
 csv_llm = ChatOpenAI(model=OPENAI_MODEL_ANALYSIS, temperature=0, stop=None)
 
-# Cache for the pandas agent executor — rebuilt only when dataset or columns change
+# Side-channel written by data_query_node before the tool loop runs.
+# Holds scalar state fields (x_field, y_field, etc.) so csv_query_tool can
+# read them without receiving parameters (tool signature is fixed to query: str).
+_state_ref: dict = {}
+
+
+def update_state_ref(patch: dict) -> None:
+    """Called by data_query_node to give csv_query_tool current field metadata."""
+    _state_ref.update(patch)
+
+
+# Cache for the pandas agent executor -- rebuilt only when dataset or columns change.
+# dataset_version from _state_ref is the cache key: it increments on every
+# layer_data_update so a new DataFrame always gets a fresh executor.
 _cached_executor = None
 _cached_version = None
 _cached_df_id = None
@@ -20,17 +32,10 @@ _cached_columns = None
 
 
 def _get_executor(df, selected_data, columns_to_use: list):
-    """
-    Return a pandas agent executor, reusing the cached one when the dataset
-    and column selection haven't changed.
-
-    Uses id(df) as a fingerprint — since update_dataframe_from_layer always
-    creates a new DataFrame object, the id changes on every data update,
-    making cache invalidation reliable regardless of dataset_version.
-    """
+    """Return a pandas agent executor, reusing the cached one when nothing changed."""
     global _cached_executor, _cached_version, _cached_df_id, _cached_columns
 
-    version = agent_context.get("dataset_version")
+    version = _state_ref.get("dataset_version")
     df_id = id(df)
     cols = tuple(columns_to_use)
 
@@ -40,6 +45,8 @@ def _get_executor(df, selected_data, columns_to_use: list):
         or df_id != _cached_df_id
         or cols != _cached_columns
     ):
+        color_field = _state_ref.get("color_field")
+        df_columns = _state_ref.get("df_columns", [])
         print(f"Building pandas agent executor (version={version}, columns={cols})")
         _cached_executor = create_pandas_dataframe_agent(
             csv_llm,
@@ -47,7 +54,7 @@ def _get_executor(df, selected_data, columns_to_use: list):
             verbose=True,
             allow_dangerous_code=True,
             agent_type="openai-tools",
-            prefix=get_data_query_prefix(),
+            prefix=get_data_query_prefix(color_field, df_columns, df),
             max_iterations=6,
             agent_executor_kwargs={"handle_parsing_errors": True},
         )
@@ -64,25 +71,25 @@ def _get_executor(df, selected_data, columns_to_use: list):
 def csv_query_tool(query: str) -> str:
     """
     Handles general queries on the currently loaded chart data.
-    Uses the DataFrame stored in agent_context["df"], filters to relevant columns,
+    Reads the DataFrame from context.get_df(), filters to relevant columns,
     and delegates to a pandas DataFrame agent with python_repl_ast.
     """
     try:
-        df = agent_context.get("df")
+        from .context import get_df
+        df = get_df()
         if df is None or df.empty:
             return (
                 "I don't have any chart data loaded right now. "
                 "Please load a chart first, and then ask your question again."
             )
 
-        x_field = agent_context.get("x_field", df.columns[0])
-        y_field = agent_context.get("y_field", df.columns[-1])
-        chart_type = (agent_context.get("chart_type") or "").lower()
-        second_column = agent_context.get("second_column")
+        x_field = _state_ref.get("x_field") or (df.columns[0] if len(df.columns) > 0 else None)
+        y_field = _state_ref.get("y_field") or (df.columns[-1] if len(df.columns) > 1 else None)
+        chart_type = (_state_ref.get("chart_type") or "").lower()
+        color_field = _state_ref.get("color_field")
+        second_column = _state_ref.get("second_column")
 
-        # Decide which columns are relevant for this chart type
-        color_field = agent_context.get("color_field")
-        if chart_type in {"bar", "line"} and {x_field, y_field}.issubset(df.columns):
+        if chart_type in {"bar", "line"} and x_field and y_field and {x_field, y_field}.issubset(df.columns):
             columns_to_use = [x_field, y_field]
             if color_field and color_field in df.columns:
                 columns_to_use.append(color_field)
@@ -91,8 +98,6 @@ def csv_query_tool(query: str) -> str:
         else:
             columns_to_use = list(df.columns)
 
-        # Include 'visible' only when some rows are actually hidden — if all data is
-        # visible, omitting the column prevents the agent from mentioning it unnecessarily
         if "visible" in df.columns and not df["visible"].all() and "visible" not in columns_to_use:
             columns_to_use.append("visible")
 

@@ -11,19 +11,32 @@ from .schema import INTENT_SCHEMA
 
 
 
-def classify_query(user_query: str, has_image: bool = False) -> dict:
+def classify_query(user_query: str, has_image: bool = False, messages: list = None) -> dict:
     """
     Classify user intent(s) AND detect deictic references in a single call.
+    Passes the last 6 messages from conversation history so the classifier
+    can resolve follow-up references like "what about Q3?" correctly.
 
     Returns:
         dict with keys:
-            - intents: Dictionary of {intent:query} pairs with query seperated independently based on intent
+            - intents: list of {type, query} dicts
             - has_deictic: boolean
     """
+    history = []
+    if messages:
+        for msg in messages[-6:]:
+            role = getattr(msg, "type", None)
+            content = getattr(msg, "content", "")
+            if role == "human":
+                history.append({"role": "user", "content": content})
+            elif role == "ai":
+                history.append({"role": "assistant", "content": content})
+
     resp = client.chat.completions.create(
         model=OPENAI_MODEL_CLASSIFIER,
         messages=[
             {"role": "system", "content": INTENT_CLASSIFIER_SYSTEM_PROMPT},
+            *history,
             {"role": "user", "content": get_intent_classification_prompt(user_query)},
         ],
         temperature=0,

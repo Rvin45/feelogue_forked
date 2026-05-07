@@ -3,8 +3,6 @@ All prompts used by the agent.
 Centralized for easy discovery and editing.
 """
 
-from .context import agent_context
-
 # 1. get_intent_classification_prompt()     classify what the user wants
 # 2. [route to intent handler]              [handle_load_chart, image_analysis, operations, chart_overview, data_query, etc]
 #
@@ -165,11 +163,8 @@ _DATA_QUERY_PREFIX_BASE = """IMPORTANT:
 """
 
 
-def get_data_query_prefix() -> str:
+def get_data_query_prefix(color_field: str | None, df_columns: list[str], df) -> str:
     """Build the pandas agent prefix, adding series-awareness when color_field is set."""
-    color_field = agent_context.get("color_field")
-    df_columns = agent_context.get("df_columns", [])
-
     prefix = _DATA_QUERY_PREFIX_BASE
 
     if color_field:
@@ -180,12 +175,11 @@ def get_data_query_prefix() -> str:
             "per-series or across all series. Always mention which series a value belongs to.\n"
         )
 
-    df = agent_context.get("df")
     if "visible" in df_columns and df is not None and not df["visible"].all():
         prefix += (
             "\n- The DataFrame has a `visible` column (boolean). Some rows are currently hidden "
             "on the user's chart. Always filter to `df[df['visible'] == True]` before computing. "
-            "Do NOT mention visibility in your response — just silently use the filtered data.\n"
+            "Do NOT mention visibility in your response -- just silently use the filtered data.\n"
         )
 
     return prefix
@@ -196,25 +190,21 @@ DATA_QUERY_PREFIX = _DATA_QUERY_PREFIX_BASE
 
 
 # =============================================================================
-# System Prompt (unified — single source of truth for the LangGraph chatbot)
+# System Prompt (unified -- single source of truth for the LangGraph chatbot)
 # =============================================================================
 
 
-def get_system_prompt(df_context_json: str) -> str:
-    """
-    Build the single system prompt for the LangGraph chatbot.
-
-    Merges what was previously split across get_chatbot_system_instructions()
-    (behavioural rules / maxims) and get_data_analyst_system_prompt()
-    (dataset preview / tool-use instructions) into one coherent prompt.
-    """
-    data_name = (
-        agent_context.get("active_layer")
-        or agent_context.get("data_name")
-        or "the current dataset"
-    )
-    x_field = agent_context.get("x_field") or "x-axis"
-    y_field = agent_context.get("y_field") or "y-axis"
+def get_system_prompt(
+    df_context_json: str,
+    data_name: str | None = None,
+    x_field: str | None = None,
+    y_field: str | None = None,
+    df=None,
+) -> str:
+    """Build the system prompt for the LangGraph chatbot."""
+    data_name = data_name or "the current dataset"
+    x_field = x_field or "x-axis"
+    y_field = y_field or "y-axis"
 
     prompt = f"""IMPORTANT:
 You are assisting with visualizing data related to {data_name}.
@@ -277,7 +267,6 @@ DATASET_PREVIEW (partial):
 - When the user says 'this chart', 'this data', or 'this dataset', they mean the chart in the current context.
 """.strip()
 
-    df = agent_context.get("df")
     has_hidden = df is not None and "visible" in df.columns and not df["visible"].all()
     if has_hidden:
         prompt += "\n**Data Scope**:\n- Some data points are currently hidden on the chart. Use only visible=True rows when answering. Do not mention visibility in your response.\n"
@@ -418,10 +407,10 @@ If no specific data points were referenced, return an empty array [].
 CRITICAL: You MUST return values EXACTLY as they appear in the lists above.
 
 Examples:
-- Response mentions "Electronics had the highest sales in Q4" → [{{"x": "Q4", "{color_col}": "Electronics"}}]
-- Response mentions "Q4 had the highest total" → [{{"x": "Q4"}}]
-- Response mentions "the average was 3.5" (no specific point) → []
-- Response mentions "the average for the Memory series is 503.57" (aggregate, no specific x-value cited) → []
+- Response mentions "Electronics had the highest sales in Q4" -> [{{"x": "Q4", "{color_col}": "Electronics"}}]
+- Response mentions "Q4 had the highest total" -> [{{"x": "Q4"}}]
+- Response mentions "the average was 3.5" (no specific point) -> []
+- Response mentions "the average for the Memory series is 503.57" (aggregate, no specific x-value cited) -> []
 
 Return only the JSON array, no explanation."""
 
@@ -437,11 +426,11 @@ If no specific data points were referenced, return an empty array [].
 
 CRITICAL: You MUST return values EXACTLY as they appear in the x-axis values list above.
 Do not abbreviate, shorten, or reformat them. Copy them character-for-character.
-For example, if the list contains "2024/Q1" and the response mentions "Q1 2024", return ["2024/Q1"] — not ["Q1 2024"] or ["Q1"].
+For example, if the list contains "2024/Q1" and the response mentions "Q1 2024", return ["2024/Q1"] -- not ["Q1 2024"] or ["Q1"].
 
 Examples:
-- Response mentions "Q1 2024 had the highest", x-values include "2024/Q1" → ["2024/Q1"]
-- Response mentions "2020 and 2021 were similar", x-values include "2020", "2021" → ["2020", "2021"]
-- Response mentions "the average was 3.5" (no specific point) → []
+- Response mentions "Q1 2024 had the highest", x-values include "2024/Q1" -> ["2024/Q1"]
+- Response mentions "2020 and 2021 were similar", x-values include "2020", "2021" -> ["2020", "2021"]
+- Response mentions "the average was 3.5" (no specific point) -> []
 
 Return only the JSON array, no explanation."""
