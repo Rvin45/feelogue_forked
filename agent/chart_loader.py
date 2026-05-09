@@ -22,7 +22,7 @@ def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
         charts = metadata
     else:
         charts = []
-
+    print("Available charts:", charts)
     def _norm_text(s: str) -> str:
         return _norm(s)
 

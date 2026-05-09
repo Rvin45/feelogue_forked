@@ -104,7 +104,8 @@ def csv_query_tool(query: str) -> str:
         selected_data = df[columns_to_use]
         executor = _get_executor(df, selected_data, columns_to_use)
 
-        result = executor.invoke({"input": query})
+        chat_history = _state_ref.get("messages") or []
+        result = executor.invoke({"input": query, "chat_history": chat_history})
         if isinstance(result, str):
             return result
         output = result.get("output")

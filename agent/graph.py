@@ -46,7 +46,7 @@ _tools_by_name = {t.name: t for t in _tools}
 _llm_with_tools = _main_llm.bind_tools(_tools)
 
 
-def _run_tool_loop(messages: list, max_iterations: int = 6) -> str:
+def _run_tool_loop(messages: list, max_iterations: int = 4) -> str:
     """Synchronous tool-calling loop. Returns the final text response."""
     msgs = list(messages)
     for _ in range(max_iterations):
@@ -66,6 +66,7 @@ def _run_tool_loop(messages: list, max_iterations: int = 6) -> str:
 
 def input_node(state: AgentState) -> dict:
     """Reset all turn-scoped output fields at the start of each invocation."""
+    print(f"\n[input_node] New turn | query: {state.get('user_query', '')!r}")
     return {
         "rtd_command": None,
         "nodes": {},
@@ -85,10 +86,12 @@ def classifier_node(state: AgentState) -> dict:
     """Classify intents and detect deictic references with conversation history."""
     user_query = state.get("user_query", "")
     messages = state.get("messages", [])
+    print(f"[classifier_node] Classifying | history_msgs={len(messages)} | followup={state.get('followup_stage')}")
 
     if state.get("followup_stage") and state.get("followup_topic") == "load_chart":
         intents = [{"type": "load_chart", "query": user_query}]
         has_deictic = False
+        print("[classifier_node] Followup override -> load_chart")
     else:
         result = classify_query(
             user_query,
@@ -98,7 +101,7 @@ def classifier_node(state: AgentState) -> dict:
         intents = result["intents"]
         has_deictic = result["has_deictic"]
 
-    print(f"Detected Intents: {intents} | Deictic: {has_deictic}")
+    print(f"[classifier_node] Intents: {[i['type'] for i in intents]} | deictic={has_deictic}")
 
     first = intents[0] if intents else {"type": "general_question", "query": user_query}
     return {
@@ -125,13 +128,18 @@ _INTENT_NODE_MAP = {
 
 def route_intent(state: AgentState) -> str:
     intent = state.get("current_intent", "general_question")
-    return _INTENT_NODE_MAP.get(intent, "data_query_node")
+    destination = _INTENT_NODE_MAP.get(intent, "data_query_node")
+    print(f"[route_intent] {intent!r} -> {destination}")
+    return destination
 
 
 def loop_or_finish(state: AgentState) -> str:
     next_idx = state.get("intent_index", 0) + 1
-    if next_idx < len(state.get("intents", [])):
+    total = len(state.get("intents", []))
+    if next_idx < total:
+        print(f"[loop_or_finish] More intents ({next_idx}/{total}) -> advance_intent_node")
         return "advance_intent_node"
+    print(f"[loop_or_finish] All {total} intent(s) done -> post_process_node")
     return "post_process_node"
 
 
@@ -155,6 +163,7 @@ def advance_intent_node(state: AgentState) -> dict:
         intents[i] = {**intents[i], "query": prefix + intents[i].get("query", "")}
 
     next_intent = intents[next_idx]
+    print(f"[advance_intent_node] {prior_type} done -> next: {next_intent['type']} (index {next_idx})")
     return {
         "intent_index": next_idx,
         "intents": intents,
@@ -169,8 +178,10 @@ def advance_intent_node(state: AgentState) -> dict:
 
 def load_chart_node(state: AgentState) -> dict:
     """Resolve and load a chart by name, with disambiguation if needed."""
+    print(f"[load_chart_node] Query: {state.get('current_query', '')!r}")
     analysis = analyze_user_intent_with_context(state.get("current_query", ""), state)
     followup = analysis.get("followup_stage", False)
+    print(f"[load_chart_node] Response: {analysis['response']!r} | rtd_command={analysis.get('rtd_command')!r} | followup={followup}")
     return {
         "intent_responses": {state["current_intent"]: analysis["response"]},
         "rtd_command": analysis.get("rtd_command"),
@@ -188,14 +199,16 @@ def image_analysis_node(state: AgentState) -> dict:
     """Analyze the current chart image using multimodal LLM."""
     base64_image = state.get("image_data")
     image_format = state.get("image_format") or "png"
+    print(f"[image_analysis_node] Query: {state.get('current_query', '')!r} | has_image={bool(base64_image)}")
 
     if not base64_image:
+        print("[image_analysis_node] No image available")
         return {
             "intent_responses": {state["current_intent"]: "I don't have an image of the current chart to analyze."},
             "followup_stage": False,
         }
 
-    print("Processing multimodal image analysis...")
+    print(f"[image_analysis_node] Calling vision model ({OPENAI_MODEL_IMAGE})...")
     response = client.chat.completions.create(
         model=OPENAI_MODEL_IMAGE,
         messages=[
@@ -213,8 +226,10 @@ def image_analysis_node(state: AgentState) -> dict:
         ],
         temperature=0,
     )
+    result_text = response.choices[0].message.content
+    print(f"[image_analysis_node] Response: {result_text!r}")
     return {
-        "intent_responses": {state["current_intent"]: response.choices[0].message.content},
+        "intent_responses": {state["current_intent"]: result_text},
         "followup_stage": False,
     }
 
@@ -225,6 +240,7 @@ def image_analysis_node(state: AgentState) -> dict:
 
 def operations_node(state: AgentState) -> dict:
     """Extract and resolve a chart operation (zoom, pan, layer switch)."""
+    print(f"[operations_node] Query: {state.get('current_query', '')!r}")
     from .context import get_df
     df = get_df()
     x_col = state.get("x_field")
@@ -247,8 +263,10 @@ def operations_node(state: AgentState) -> dict:
         x_col=x_col,
         y_col=y_col,
     )
+    ack = build_operation_ack(rtd_cmd)
+    print(f"[operations_node] rtd_command={rtd_cmd} | ack={ack!r}")
     return {
-        "intent_responses": {state["current_intent"]: build_operation_ack(rtd_cmd)},
+        "intent_responses": {state["current_intent"]: ack},
         "rtd_command": rtd_cmd,
         "followup_stage": False,
     }
@@ -260,6 +278,7 @@ def operations_node(state: AgentState) -> dict:
 
 def chart_overview_node(state: AgentState) -> dict:
     """Generate a spoken overview of the current chart."""
+    print(f"[chart_overview_node] chart_type={state.get('chart_type')!r} | pre_built={bool(state.get('chart_overview'))}")
     pre_built = state.get("chart_overview")
 
     if pre_built:
@@ -282,6 +301,7 @@ def chart_overview_node(state: AgentState) -> dict:
             response = " ".join(parts) if parts else str(pre_built)
         else:
             response = str(pre_built)
+        print(f"[chart_overview_node] Used pre-built overview: {response[:80]!r}...")
         return {"intent_responses": {state["current_intent"]: response}, "followup_stage": False}
 
     chart_type = state.get("chart_type")
@@ -312,6 +332,7 @@ def chart_overview_node(state: AgentState) -> dict:
         print(f"Warning: GPT overview fallback due to: {e}")
         response = f"This {chart_type} chart shows how {y_col} changes with respect to {x_col}."
 
+    print(f"[chart_overview_node] Generated overview: {response[:80]!r}...")
     return {"intent_responses": {state["current_intent"]: response}, "followup_stage": False}
 
 
@@ -330,6 +351,8 @@ def data_query_node(state: AgentState) -> dict:
     df = get_df()
 
     query = state.get("current_query", "")
+    print(f"[data_query_node] Intent: {state.get('current_intent')!r} | Query: {query!r}")
+    print(f"[data_query_node] df={'loaded' if df is not None else 'None'} | dataset_version={state.get('dataset_version')} | history_msgs={len(state.get('messages', []))}")
     touchdata = state.get("touchdata", {})
     highlighted_context = state.get("highlighted_context", {})
 
@@ -346,6 +369,8 @@ def data_query_node(state: AgentState) -> dict:
         referent_parts.extend(highlight_info)
 
     enriched_query = f"{query} ({'; '.join(referent_parts)})" if referent_parts else query
+    if referent_parts:
+        print(f"[data_query_node] Enriched query: {enriched_query!r}")
 
     # Persist best referent for future deictic ops
     patch_referents = {}
@@ -371,7 +396,8 @@ def data_query_node(state: AgentState) -> dict:
         "tail": tail,
     }
 
-    # Write scalar field metadata so csv_query_tool can read them
+    # Write scalar field metadata + recent messages so csv_query_tool can read them.
+    # Messages are capped at 6 (3 turns) to keep the pandas agent context focused.
     update_state_ref({
         "x_field": state.get("x_field"),
         "y_field": state.get("y_field"),
@@ -379,6 +405,7 @@ def data_query_node(state: AgentState) -> dict:
         "chart_type": state.get("chart_type"),
         "dataset_version": state.get("dataset_version", 0),
         "df_columns": df_cols,
+        "messages": list(state.get("messages", []))[-6:],
     })
 
     # Build message list: system prompt + prior conversation + new query
@@ -391,10 +418,10 @@ def data_query_node(state: AgentState) -> dict:
     ))
     messages_for_llm = [system_msg] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
 
-    # Run inline tool loop
+    print(f"[data_query_node] Running tool loop (messages_for_llm count={len(messages_for_llm)})...")
     start_time = time.time()
     response_text = _run_tool_loop(messages_for_llm)
-    print(f"Tool loop completed in {time.time() - start_time:.2f}s.")
+    print(f"[data_query_node] Tool loop done in {time.time() - start_time:.2f}s")
 
     # Post-processing
     response_text = strip_markdown(response_text)
@@ -408,7 +435,8 @@ def data_query_node(state: AgentState) -> dict:
         state.get("x_field"), state.get("y_field"),
         color_col=state.get("color_field"),
     )
-    print("Extracted nodes:", extracted_nodes)
+    print(f"[data_query_node] Response: {response_text!r}")
+    print(f"[data_query_node] Extracted nodes: {extracted_nodes}")
 
     return {
         "intent_responses": {state["current_intent"]: response_text},
@@ -430,14 +458,17 @@ def data_query_node(state: AgentState) -> dict:
 def post_process_node(state: AgentState) -> dict:
     """Assemble the final response from all per-intent results."""
     intent_responses = state.get("intent_responses") or {}
+    print(f"[post_process_node] Assembling from {len(intent_responses)} intent(s): {list(intent_responses.keys())}")
 
     if len(intent_responses) > 1:
+        print("[post_process_node] Merging multi-intent responses...")
         final_response = combine_multi_intent_responses(intent_responses)
     elif len(intent_responses) == 1:
         final_response = next(iter(intent_responses.values()))
     else:
         final_response = "I'm not sure how to help with that."
 
+    print(f"[post_process_node] Final response: {final_response!r}")
     return {"final_response": final_response}
 
 

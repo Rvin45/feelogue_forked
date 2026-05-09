@@ -37,7 +37,7 @@ def classify_query(user_query: str, has_image: bool = False, messages: list = No
         messages=[
             {"role": "system", "content": INTENT_CLASSIFIER_SYSTEM_PROMPT},
             *history,
-            {"role": "user", "content": get_intent_classification_prompt(user_query)},
+            {"role": "user", "content": get_intent_classification_prompt(user_query, history=history)},
         ],
         temperature=0,
         response_format={
