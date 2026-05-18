@@ -212,35 +212,47 @@ public class VegaChartLoader : MonoBehaviour
     }
 
     /// <summary>
-    /// Select a chart by ID using auto-discovery.
-    /// Replaces the old hardcoded switch statement.
+    /// Resolve a chart ID to a DiscoveredChart, falling back to the first
+    /// available chart when the ID isn't recognized.
     /// </summary>
-    public void SelectFile(int option)
+    private DiscoveredChart ResolveChart(int option)
     {
-        DiscoveredChart chart = _chartDiscovery.GetChartById(option);
-
+        var chart = _chartDiscovery.GetChartById(option);
         if (chart == null)
         {
             UnityEngine.Debug.LogWarning($"Chart with ID {option} not found. Using first available chart.");
-            chart = _availableCharts.FirstOrDefault();
+            chart = _availableCharts?.FirstOrDefault();
         }
-
         if (chart == null)
         {
-            UnityEngine.Debug.LogError($"No charts available!");
-            return;
+            UnityEngine.Debug.LogError("No charts available!");
         }
+        return chart;
+    }
 
-        // Set chart properties
-        filePath = chart.jsonFilePath;
-        chartType = chart.chartType;
-        dataName = chart.dataName;
-        imagePath = chart.pngFilePath;
-
-        UnityEngine.Debug.Log($"Selected chart {option}: {chart.DisplayName}");
-        UnityEngine.Debug.Log($"JSON: {filePath}");
-        UnityEngine.Debug.Log($"PNG: {imagePath}");
-        UnityEngine.Debug.Log($"Type: {chartType}, Data: {dataName}");
+    /// <summary>
+    /// Deserialize a chart's cached schema JSON into a VegaSpec, or return null
+    /// if the cached JSON is missing or malformed.
+    /// </summary>
+    private VegaSpec ParseSpec(DiscoveredChart chart)
+    {
+        if (string.IsNullOrEmpty(chart.schemaJson))
+        {
+            UnityEngine.Debug.LogError($"Chart {chart.id} ({chart.jsonFilePath}) has no cached schema JSON");
+            return null;
+        }
+        try
+        {
+            var spec = JsonConvert.DeserializeObject<VegaSpec>(chart.schemaJson);
+            if (spec == null)
+                UnityEngine.Debug.LogError($"Failed to deserialize Vega spec for chart {chart.id} ({chart.jsonFilePath})");
+            return spec;
+        }
+        catch (Exception ex)
+        {
+            UnityEngine.Debug.LogError($"Failed to deserialize Vega spec for chart {chart.id} ({chart.jsonFilePath}): {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>
@@ -453,28 +465,26 @@ public class VegaChartLoader : MonoBehaviour
     {
         UnityEngine.Debug.Log($"LoadChart called for option {option}");
 
-        SelectFile(option);
+        var chart = ResolveChart(option);
+        if (chart == null) return;
 
-        // Get the selected chart
-        DiscoveredChart chart = _chartDiscovery.GetChartById(option);
-        if (chart == null)
-        {
-            UnityEngine.Debug.LogError($"Chart {option} not found!");
-            return;
-        }
+        UnityEngine.Debug.Log($"Selected chart {option}: {chart.DisplayName} (json={chart.jsonFilePath}, png={chart.pngFilePath})");
 
-        // Load Vega spec to get data range
-        string jsonFullPath = chart.GetFullJsonPath();
-        if (!File.Exists(jsonFullPath))
-        {
-            UnityEngine.Debug.LogError($"JSON file not found: {jsonFullPath}");
-            return;
-        }
+        var spec = ParseSpec(chart);
+        if (spec == null) return;
 
-        string vegaJson = File.ReadAllText(jsonFullPath);
-        _rawVegaJson = vegaJson;
-        _currentVegaSpec = JsonConvert.DeserializeObject<VegaSpec>(vegaJson);
+        _rawVegaJson = chart.schemaJson;
+        _currentVegaSpec = spec;
 
+        ApplySpec(chart, option);
+    }
+
+    /// <summary>
+    /// Apply a parsed Vega spec: resolve layers, run transforms, size the viewport,
+    /// compute the Y-range, push metadata to MQTT, and render the RTD grid.
+    /// </summary>
+    private void ApplySpec(DiscoveredChart chart, int option)
+    {
         if (_currentVegaSpec.Layer != null)
         {
             UnityEngine.Debug.Log($"Deserialized {_currentVegaSpec.Layer.Count} layers from JSON");
@@ -562,7 +572,7 @@ public class VegaChartLoader : MonoBehaviour
 
         // Set max viewport points based on chart type
         // Line charts: 50 pins wide / 2 = 25 max points
-        // Bar charts: depends on thick mode — need min 3px bar + 1px gap = max 12 bars
+        // Bar charts: depends on thick mode - need min 3px bar + 1px gap = max 12 bars
         // Scatter plots can show all points (overlapping is OK)
         string colorField2 = _currentVegaSpec.Encoding?.GetColorField();
         bool isStackedBar = (chartType == "bar" && colorField2 != null);

@@ -362,7 +362,9 @@
               "as": "interest rate (%)"
             }
           ],
-          "groupby": ["year"]
+          "groupby": [
+            "year"
+          ]
         }
       ],
       "mark": {
@@ -384,7 +386,10 @@
           "type": "quantitative",
           "title": "Interest Rate (%)",
           "scale": {
-            "domain": [0, 5]
+            "domain": [
+              0,
+              5
+            ]
           }
         },
         "color": {
@@ -412,7 +417,9 @@
               "as": "interest rate (%)"
             }
           ],
-          "groupby": ["quarter"]
+          "groupby": [
+            "quarter"
+          ]
         }
       ],
       "mark": {
@@ -434,7 +441,10 @@
           "type": "quantitative",
           "title": "Interest Rate (%)",
           "scale": {
-            "domain": [0, 5]
+            "domain": [
+              0,
+              5
+            ]
           }
         },
         "color": {
@@ -467,7 +477,10 @@
           "type": "quantitative",
           "title": "Interest Rate (%)",
           "scale": {
-            "domain": [0, 5]
+            "domain": [
+              0,
+              5
+            ]
           }
         },
         "color": {
@@ -493,5 +506,10 @@
     "mark": {
       "strokeWidth": 2
     }
+  },
+  "metadata": {
+    "dataName": "interestrates",
+    "chartType": "line",
+    "displayName": "Interest Rate - Line Chart"
   }
 }

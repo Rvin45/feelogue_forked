@@ -6,27 +6,111 @@
   "data": {
     "name": "source",
     "values": [
-      { "month": "February 2025", "price_aud ($)": 190, "series": "Memory" },
-      { "month": "February 2025", "price_aud ($)": 330, "series": "Storage" },
-      { "month": "February 2025", "price_aud ($)": 850, "series": "GPU" },
-      { "month": "April 2025", "price_aud ($)": 200, "series": "Memory" },
-      { "month": "April 2025", "price_aud ($)": 345, "series": "Storage" },
-      { "month": "April 2025", "price_aud ($)": 830, "series": "GPU" },
-      { "month": "June 2025", "price_aud ($)": 225, "series": "Memory" },
-      { "month": "June 2025", "price_aud ($)": 360, "series": "Storage" },
-      { "month": "June 2025", "price_aud ($)": 820, "series": "GPU" },
-      { "month": "August 2025", "price_aud ($)": 360, "series": "Memory" },
-      { "month": "August 2025", "price_aud ($)": 360, "series": "Storage" },
-      { "month": "August 2025", "price_aud ($)": 840, "series": "GPU" },
-      { "month": "October 2025", "price_aud ($)": 600, "series": "Memory" },
-      { "month": "October 2025", "price_aud ($)": 425, "series": "Storage" },
-      { "month": "October 2025", "price_aud ($)": 860, "series": "GPU" },
-      { "month": "December 2025", "price_aud ($)": 850, "series": "Memory" },
-      { "month": "December 2025", "price_aud ($)": 525, "series": "Storage" },
-      { "month": "December 2025", "price_aud ($)": 850, "series": "GPU" },
-      { "month": "February 2026", "price_aud ($)": 1100, "series": "Memory" },
-      { "month": "February 2026", "price_aud ($)": 600, "series": "Storage" },
-      { "month": "February 2026", "price_aud ($)": 835, "series": "GPU" }
+      {
+        "month": "February 2025",
+        "price_aud ($)": 190,
+        "series": "Memory"
+      },
+      {
+        "month": "February 2025",
+        "price_aud ($)": 330,
+        "series": "Storage"
+      },
+      {
+        "month": "February 2025",
+        "price_aud ($)": 850,
+        "series": "GPU"
+      },
+      {
+        "month": "April 2025",
+        "price_aud ($)": 200,
+        "series": "Memory"
+      },
+      {
+        "month": "April 2025",
+        "price_aud ($)": 345,
+        "series": "Storage"
+      },
+      {
+        "month": "April 2025",
+        "price_aud ($)": 830,
+        "series": "GPU"
+      },
+      {
+        "month": "June 2025",
+        "price_aud ($)": 225,
+        "series": "Memory"
+      },
+      {
+        "month": "June 2025",
+        "price_aud ($)": 360,
+        "series": "Storage"
+      },
+      {
+        "month": "June 2025",
+        "price_aud ($)": 820,
+        "series": "GPU"
+      },
+      {
+        "month": "August 2025",
+        "price_aud ($)": 360,
+        "series": "Memory"
+      },
+      {
+        "month": "August 2025",
+        "price_aud ($)": 360,
+        "series": "Storage"
+      },
+      {
+        "month": "August 2025",
+        "price_aud ($)": 840,
+        "series": "GPU"
+      },
+      {
+        "month": "October 2025",
+        "price_aud ($)": 600,
+        "series": "Memory"
+      },
+      {
+        "month": "October 2025",
+        "price_aud ($)": 425,
+        "series": "Storage"
+      },
+      {
+        "month": "October 2025",
+        "price_aud ($)": 860,
+        "series": "GPU"
+      },
+      {
+        "month": "December 2025",
+        "price_aud ($)": 850,
+        "series": "Memory"
+      },
+      {
+        "month": "December 2025",
+        "price_aud ($)": 525,
+        "series": "Storage"
+      },
+      {
+        "month": "December 2025",
+        "price_aud ($)": 850,
+        "series": "GPU"
+      },
+      {
+        "month": "February 2026",
+        "price_aud ($)": 1100,
+        "series": "Memory"
+      },
+      {
+        "month": "February 2026",
+        "price_aud ($)": 600,
+        "series": "Storage"
+      },
+      {
+        "month": "February 2026",
+        "price_aud ($)": 835,
+        "series": "GPU"
+      }
     ]
   },
   "mark": {
@@ -49,10 +133,21 @@
       "type": "quantitative",
       "title": "Average Price (AUD)",
       "scale": {
-        "domain": [0, 1200]
+        "domain": [
+          0,
+          1200
+        ]
       },
       "axis": {
-        "values": [0, 200, 400, 600, 800, 1000, 1200]
+        "values": [
+          0,
+          200,
+          400,
+          600,
+          800,
+          1000,
+          1200
+        ]
       }
     },
     "color": {
@@ -80,5 +175,10 @@
     "mark": {
       "strokeWidth": 2
     }
+  },
+  "metadata": {
+    "dataName": "ramprice",
+    "chartType": "line",
+    "displayName": "Computer Component Prices - Line Chart"
   }
 }

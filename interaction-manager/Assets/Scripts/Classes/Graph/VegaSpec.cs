@@ -30,6 +30,9 @@ public class VegaSpec
     [JsonProperty("overview")]
     public Dictionary<string, string> Overview { get; set; }
 
+    [JsonProperty("metadata")]
+    public ChartMetadata Metadata { get; set; }
+
     public string GetMarkType()
     {
         if (Mark == null) return "point";
@@ -42,6 +45,34 @@ public class VegaSpec
 
         return "point";
     }
+}
+
+/// <summary>
+/// Chart metadata block. Lives inside the Vega spec JSON under "metadata".
+/// Replaces filename-based parsing - the filename is now just an identifier.
+/// </summary>
+[Serializable]
+public class ChartMetadata
+{
+    [JsonProperty("dataName")]
+    public string DataName { get; set; }
+
+    [JsonProperty("chartType")]
+    public string ChartType { get; set; }
+
+    [JsonProperty("variant")]
+    public string Variant { get; set; }
+
+    [JsonProperty("displayName")]
+    public string DisplayName { get; set; }
+
+    [JsonProperty("previewImage")]
+    public string PreviewImage { get; set; }
+
+    public bool IsValid() =>
+        !string.IsNullOrEmpty(DataName) &&
+        !string.IsNullOrEmpty(ChartType) &&
+        !string.IsNullOrEmpty(DisplayName);
 }
 
 [Serializable]
