@@ -87,7 +87,7 @@ def classifier_node(state: AgentState) -> dict:
     user_query = state.get("user_query", "")
     messages = state.get("messages", [])
     print(f"[classifier_node] Classifying | history_msgs={len(messages)} | followup={state.get('followup_stage')}")
-
+    print(f"Current message history: {state.get("messages","No chat")}")
     if state.get("followup_stage") and state.get("followup_topic") == "load_chart":
         intents = [{"type": "load_chart", "query": user_query}]
         has_deictic = False
@@ -231,6 +231,7 @@ def image_analysis_node(state: AgentState) -> dict:
     return {
         "intent_responses": {state["current_intent"]: result_text},
         "followup_stage": False,
+
     }
 
 
@@ -269,6 +270,7 @@ def operations_node(state: AgentState) -> dict:
         "intent_responses": {state["current_intent"]: ack},
         "rtd_command": rtd_cmd,
         "followup_stage": False,
+
     }
 
 
@@ -383,6 +385,7 @@ def data_query_node(state: AgentState) -> dict:
         best_nv = _pick_best_node_values(highlight_nodes)
         if best_nv:
             patch_referents["last_referent_node_values"] = best_nv
+    state["current_query"] = enriched_query
 
     # Build df_context for system prompt
     df_cols = state.get("df_columns") or []
@@ -446,7 +449,6 @@ def data_query_node(state: AgentState) -> dict:
         "touch_nodes": touch_nodes if use_touch else {},
         "highlight_nodes": highlight_nodes if use_highlight else {},
         "followup_stage": False,
-        "messages": [HumanMessage(content=enriched_query), AIMessage(content=response_text)],
         **patch_referents,
     }
 
@@ -469,7 +471,10 @@ def post_process_node(state: AgentState) -> dict:
         final_response = "I'm not sure how to help with that."
 
     print(f"[post_process_node] Final response: {final_response!r}")
-    return {"final_response": final_response}
+    return {
+        "final_response": final_response, 
+        "messages": [HumanMessage(content=state.get("current_query", ""),additional_kwargs = {"intent": [i["type"] for i in state.get("intents", [])]}), AIMessage(content=final_response)],
+    }
 
 
 # =============================================================================

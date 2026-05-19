@@ -470,3 +470,14 @@ Examples:
 - Response mentions "the average was 3.5" (no specific point) -> []
 
 Return only the JSON array, no explanation."""
+
+
+
+def get_load_chart_system_prompt()->str:
+    return """
+    """
+
+
+def get_load_chart_prompt()->str:
+    return """
+    """

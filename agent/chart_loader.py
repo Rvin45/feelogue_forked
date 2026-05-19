@@ -3,6 +3,9 @@ Chart loading and disambiguation.
 """
 from difflib import SequenceMatcher
 from .utils import _norm
+from .client import client
+from .utils import parse_llm_json
+
 
 
 def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
@@ -137,3 +140,40 @@ def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
         "followup_stage": True,
         "pending_chart_options": [c[1] for c in candidates[:3]],
     }
+
+
+
+# def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
+#     """
+#     Resolve a load_chart request using chart_metadata_index.
+#     - If exactly one matching chart -> auto-load it.
+#     - If multiple (e.g., bar + line) -> ask user to choose.
+
+#     Returns a dict with keys:
+#         response, rtd_command, followup_stage, pending_chart_options
+#     No longer mutates context -- the caller (load_chart_node) applies state patches.
+#     """
+#     metadata = context.get("chart_metadata_index") or {}
+#     if isinstance(metadata, dict) and "charts" in metadata:
+#         charts = metadata.get("charts", [])
+#     elif isinstance(metadata, list):
+#         charts = metadata
+#     else:
+#         charts = []
+#     print("Available charts:", charts)
+
+#     resp = client.chat.completions.create(
+#         model=OPENAI_MODEL,
+#         messages=[
+#             {"role": "system", "content": OPERATIONS_SYSTEM_PROMPT},
+#             {"role": "user", "content": get_operations_extraction_prompt(user_query, x_values)},
+#         ],
+#         temperature=0,
+#     )
+
+#     raw = (resp.choices[0].message.content or "").strip()
+
+#     result = parse_llm_json(raw, fallback={"operation": None, "target": None, "factor": None})
+
+
+
