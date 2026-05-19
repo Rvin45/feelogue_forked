@@ -66,7 +66,7 @@ Return JSON with two fields:
     shapes, layout), counting elements (bars, lines), identifying by position
     or resolving WHICH specific element is being referenced before any 
     data operation. MUST precede data_analysis when the target element 
-    is identified visually rather than by name.
+    is identified visually rather than by name. 
 
    - touch_interaction: references something touched/highlighted on the chart
 
