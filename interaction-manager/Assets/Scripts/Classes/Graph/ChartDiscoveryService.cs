@@ -2,102 +2,46 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using UnityEngine;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 /// <summary>
 /// Discovers chart files automatically by scanning the project structure.
-/// Expects charts to follow naming convention: compiled-vl-{chartType}-{dataName}-new.json
-/// Automatically finds matching PNG files.
+/// Each chart JSON must contain a top-level "metadata" block with dataName,
+/// chartType, and displayName. The filename itself is only an identifier.
 /// </summary>
 public class ChartDiscoveryService
 {
-    // ===== Constants =====
-    private const string CHART_JSON_PATTERN = "compiled-vl-*-new.json";
+    // Loose pattern - middle part is an identifier only. Metadata lives in the JSON.
+    private const string CHART_JSON_PATTERN = "compiled-vl-*.json";
 
-    // Regex to extract dataName and chartType from filename: compiled-vl-{dataName}-{chartType}-new.json
-    // Example: compiled-vl-tslastock-line-new.json → dataName: "tslastock", chartType: "line"
-    private static readonly Regex ChartFilenameRegex = new Regex(
-        @"^compiled-vl-(?<dataName>[^-]+)-(?<chartType>.+)-new\.json$",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled
-    );
-
-    // ===== Discovered Charts =====
     private List<DiscoveredChart> _discoveredCharts = new List<DiscoveredChart>();
 
-    /// <summary>
-    /// Scans the project for chart JSON files and returns discovered charts.
-    /// </summary>
     public List<DiscoveredChart> DiscoverCharts()
     {
         _discoveredCharts.Clear();
 
         string streamingAssetsPath = Application.streamingAssetsPath;
-
         if (!Directory.Exists(streamingAssetsPath))
         {
             Debug.LogError($"StreamingAssets folder not found: {streamingAssetsPath}");
             return _discoveredCharts;
         }
 
-        // Get all Vega-Lite JSON files
         string[] jsonFiles = Directory.GetFiles(streamingAssetsPath, CHART_JSON_PATTERN);
-        Debug.Log($"Found {jsonFiles.Length} Vega-Lite JSON files");
+        Debug.Log($"Found {jsonFiles.Length} candidate Vega-Lite JSON files");
 
         int chartId = 1;
         foreach (string jsonFilePath in jsonFiles)
         {
             string filename = Path.GetFileName(jsonFilePath);
+            var chart = TryLoadChart(jsonFilePath, filename, chartId);
+            if (chart == null) continue;
 
-            var match = ChartFilenameRegex.Match(filename);
-            if (match.Success)
-            {
-                string chartType = match.Groups["chartType"].Value;
-                string dataName = match.Groups["dataName"].Value;
-
-                // Parse JSON to extract metadata
-                var (chartName, field, columns, schemaJson) = ExtractChartMetadata(jsonFilePath);
-
-                // Find and encode PNG preview
-                string pngPath = FindPngFile(dataName, chartType);
-                string imageBase64 = null;
-                string imageFormat = null;
-
-                if (!string.IsNullOrEmpty(pngPath))
-                {
-                    string fullPngPath = Path.Combine(Application.streamingAssetsPath, pngPath);
-                    if (File.Exists(fullPngPath))
-                    {
-                        byte[] imageBytes = File.ReadAllBytes(fullPngPath);
-                        imageBase64 = Convert.ToBase64String(imageBytes);
-                        imageFormat = "png";
-                    }
-                }
-
-                var chart = new DiscoveredChart
-                {
-                    id = chartId++,
-                    dataName = dataName,
-                    chartType = chartType,
-                    dataset = null,
-                    field = field ?? dataName,      // Fallback to dataName if not found
-                    chartName = chartName,           // From Vega description field
-                    jsonFilePath = filename,  // Store relative path
-                    pngFilePath = pngPath,
-                    columns = columns ?? new List<string>(),
-                    schemaJson = schemaJson,
-                    imageBase64 = imageBase64,
-                    imageFormat = imageFormat
-                };
-
-                _discoveredCharts.Add(chart);
-                Debug.Log($"Discovered chart {chart.id}: {chart.DisplayName} (name={chart.chartName}, field={chart.field}, columns={chart.columns.Count})");
-            }
-            else
-            {
-                Debug.LogWarning($"JSON file doesn't match naming convention: {filename}");
-            }
+            _discoveredCharts.Add(chart);
+            chartId++;
+            Debug.Log($"Discovered chart {chart.id}: {chart.DisplayName} (field={chart.field}, columns={chart.columns.Count})");
         }
 
         Debug.Log($"Total charts discovered: {_discoveredCharts.Count}");
@@ -105,56 +49,135 @@ public class ChartDiscoveryService
     }
 
     /// <summary>
-    /// Get a discovered chart by its ID.
+    /// Parse one spec file and build a DiscoveredChart, or return null if the file
+    /// is empty, malformed, or missing required metadata.
     /// </summary>
-    public DiscoveredChart GetChartById(int id)
+    private DiscoveredChart TryLoadChart(string jsonFilePath, string filename, int chartId)
     {
-        return _discoveredCharts.FirstOrDefault(c => c.id == id);
-    }
-
-    /// <summary>
-    /// Get all discovered charts.
-    /// </summary>
-    public List<DiscoveredChart> GetAllCharts()
-    {
-        return _discoveredCharts;
-    }
-
-    // ===== Private Helper Methods =====
-
-    /// <summary>
-    /// Extract metadata from Vega-Lite JSON spec.
-    /// Returns: (chartName, field, columns, schemaJson)
-    /// </summary>
-    private (string chartName, string field, List<string> columns, string schemaJson) ExtractChartMetadata(string jsonFilePath)
-    {
+        string jsonContent;
         try
         {
-            string jsonContent = File.ReadAllText(jsonFilePath);
-            var spec = JObject.Parse(jsonContent);
-
-            // Extract field from y-axis encoding
-            string field = spec["encoding"]?["y"]?["field"]?.ToString();
-
-            // Extract chart name from description field
-            string chartName = spec["description"]?.ToString();
-
-            // Extract all unique column names from the spec
-            List<string> columns = ExtractColumns(spec);
-
-            return (chartName, field, columns, jsonContent);
+            jsonContent = File.ReadAllText(jsonFilePath);
         }
         catch (Exception ex)
         {
-            Debug.LogWarning($"Failed to extract metadata from {Path.GetFileName(jsonFilePath)}: {ex.Message}");
-            return (null, null, null, null);
+            Debug.LogWarning($"Skipping {filename}: failed to read file ({ex.Message})");
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(jsonContent))
+        {
+            Debug.LogWarning($"Skipping {filename}: file is empty");
+            return null;
+        }
+
+        JObject spec;
+        try
+        {
+            spec = JObject.Parse(jsonContent);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Skipping {filename}: invalid JSON ({ex.Message})");
+            return null;
+        }
+
+        var metaToken = spec["metadata"];
+        if (metaToken == null || metaToken.Type != JTokenType.Object)
+        {
+            Debug.LogWarning($"Skipping {filename}: missing required 'metadata' block");
+            return null;
+        }
+
+        ChartMetadata metadata;
+        try
+        {
+            metadata = metaToken.ToObject<ChartMetadata>();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Skipping {filename}: malformed metadata ({ex.Message})");
+            return null;
+        }
+
+        if (!metadata.IsValid())
+        {
+            Debug.LogWarning($"Skipping {filename}: metadata must include dataName, chartType, and displayName");
+            return null;
+        }
+
+        string field = spec["encoding"]?["y"]?["field"]?.ToString()
+            ?? (spec["layer"]?.FirstOrDefault()?["encoding"]?["y"]?["field"]?.ToString());
+        string chartName = metadata.DisplayName;
+        List<string> columns = ExtractColumns(spec);
+
+        string pngFilename = ResolvePreviewImage(metadata);
+        var (imageBase64, imageFormat) = TryLoadPng(pngFilename);
+
+        return new DiscoveredChart
+        {
+            id = chartId,
+            dataName = metadata.DataName,
+            chartType = metadata.ChartType,
+            variant = metadata.Variant,
+            dataset = null,
+            field = field ?? metadata.DataName,
+            chartName = chartName,
+            jsonFilePath = filename,
+            pngFilePath = pngFilename,
+            columns = columns,
+            schemaJson = jsonContent,
+            imageBase64 = imageBase64,
+            imageFormat = imageFormat
+        };
+    }
+
+    public DiscoveredChart GetChartById(int id) =>
+        _discoveredCharts.FirstOrDefault(c => c.id == id);
+
+    public List<DiscoveredChart> GetAllCharts() => _discoveredCharts;
+
+    /// <summary>
+    /// Resolve preview PNG filename: explicit metadata.previewImage wins;
+    /// otherwise fall back to the legacy chart-{chartType}-{dataName}[-{variant}]-new.png convention.
+    /// </summary>
+    private string ResolvePreviewImage(ChartMetadata metadata)
+    {
+        if (!string.IsNullOrEmpty(metadata.PreviewImage))
+            return metadata.PreviewImage;
+
+        string variantSuffix = string.IsNullOrEmpty(metadata.Variant) ? "" : $"-{metadata.Variant}";
+        string candidate = $"chart-{metadata.ChartType}-{metadata.DataName}{variantSuffix}-new.png";
+        string fullPath = Path.Combine(Application.streamingAssetsPath, candidate);
+        if (File.Exists(fullPath)) return candidate;
+
+        // Fall back to variant-less filename
+        string baseline = $"chart-{metadata.ChartType}-{metadata.DataName}-new.png";
+        return File.Exists(Path.Combine(Application.streamingAssetsPath, baseline)) ? baseline : null;
+    }
+
+    private (string base64, string format) TryLoadPng(string pngFilename)
+    {
+        if (string.IsNullOrEmpty(pngFilename)) return (null, null);
+
+        string fullPngPath = Path.Combine(Application.streamingAssetsPath, pngFilename);
+        if (!File.Exists(fullPngPath)) return (null, null);
+
+        try
+        {
+            byte[] imageBytes = File.ReadAllBytes(fullPngPath);
+            return (Convert.ToBase64String(imageBytes), "png");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Failed to load preview {pngFilename}: {ex.Message}");
+            return (null, null);
         }
     }
 
     /// <summary>
     /// Extract all column names from a Vega-Lite spec.
-    /// Gets column names from the data values (first row keys).
-    /// For maps, extracts from lookup transform data.
+    /// Gets column names from data values (first row keys), plus lookup transform data for maps.
     /// </summary>
     private List<string> ExtractColumns(JObject spec)
     {
@@ -162,67 +185,26 @@ public class ChartDiscoveryService
 
         try
         {
-            // Check top-level data values
-            var dataToken = spec["data"];
-            if (dataToken != null && dataToken.Type == JTokenType.Object)
-            {
-                var dataValues = dataToken["values"] as JArray;
-                if (dataValues != null && dataValues.Count > 0)
-                {
-                    var firstRow = dataValues[0] as JObject;
-                    if (firstRow != null)
-                    {
-                        foreach (var prop in firstRow.Properties())
-                        {
-                            columns.Add(prop.Name);
-                        }
-                    }
-                }
-            }
+            var dataValues = spec["data"]?["values"] as JArray;
+            AddRowKeys(dataValues, columns);
 
-            // For maps: check lookup transform data in layers
             var layers = spec["layer"] as JArray;
             if (layers != null)
             {
                 foreach (var layer in layers)
                 {
-                    if (layer.Type != JTokenType.Object)
-                        continue;
+                    if (layer.Type != JTokenType.Object) continue;
 
                     var transforms = layer["transform"] as JArray;
-                    if (transforms != null)
+                    if (transforms == null) continue;
+
+                    foreach (var transform in transforms)
                     {
-                        foreach (var transform in transforms)
-                        {
-                            if (transform.Type != JTokenType.Object)
-                                continue;
+                        if (transform.Type != JTokenType.Object) continue;
+                        if (transform["lookup"]?.Type != JTokenType.String) continue;
 
-                            // Check if this is a lookup transform
-                            var lookupToken = transform["lookup"];
-                            if (lookupToken == null || lookupToken.Type != JTokenType.String)
-                                continue;
-
-                            var fromToken = transform["from"];
-                            if (fromToken == null || fromToken.Type != JTokenType.Object)
-                                continue;
-
-                            var dataObj = fromToken["data"];
-                            if (dataObj == null || dataObj.Type != JTokenType.Object)
-                                continue;
-
-                            var lookupData = dataObj["values"] as JArray;
-                            if (lookupData != null && lookupData.Count > 0)
-                            {
-                                var firstRow = lookupData[0] as JObject;
-                                if (firstRow != null)
-                                {
-                                    foreach (var prop in firstRow.Properties())
-                                    {
-                                        columns.Add(prop.Name);
-                                    }
-                                }
-                            }
-                        }
+                        var lookupData = transform["from"]?["data"]?["values"] as JArray;
+                        AddRowKeys(lookupData, columns);
                     }
                 }
             }
@@ -235,24 +217,11 @@ public class ChartDiscoveryService
         return columns.ToList();
     }
 
-
-    /// <summary>
-    /// Find the PNG preview file matching the chart (optional).
-    /// Expected: chart-{chartType}-{dataName}-new.png
-    /// </summary>
-    private string FindPngFile(string dataName, string chartType)
+    private static void AddRowKeys(JArray values, HashSet<string> columns)
     {
-        string expectedFilename = $"chart-{chartType}-{dataName}-new.png";
-        string pngPath = Path.Combine(Application.streamingAssetsPath, expectedFilename);
-
-        if (File.Exists(pngPath))
-        {
-            Debug.Log($"Found PNG: {expectedFilename}");
-            return expectedFilename; // Return relative path for StreamingAssets
-        }
-
-        Debug.Log($"ℹ PNG preview not found: {expectedFilename} (optional)");
-        return null;
+        if (values == null || values.Count == 0) return;
+        if (!(values[0] is JObject firstRow)) return;
+        foreach (var prop in firstRow.Properties()) columns.Add(prop.Name);
     }
 }
 
@@ -265,39 +234,38 @@ public class DiscoveredChart
     public int id;
     public string dataName;
     public string chartType;
-    public string dataset;         // Dataset name (e.g., "housing", "australian")
-    public string field;           // Field name (e.g., "interest rate (%)", "gdp")
-    public string jsonFilePath;    // Relative path in StreamingAssets (required)
-    public string pngFilePath;     // Relative path in StreamingAssets (optional preview)
+    public string variant;         // Optional variant (e.g., "daily", "weekly")
+    public string dataset;
+    public string field;
+    public string jsonFilePath;
+    public string pngFilePath;
 
-    // Extended metadata for agent
-    public string chartName;       // Chart name from Vega description field
-    public List<string> columns;   // All columns/fields in the data
-    public string schemaJson;      // Full Vega-Lite spec as JSON string
-    public string imageBase64;     // Base64-encoded PNG preview
-    public string imageFormat;     // Image format (e.g., "png")
+    public string chartName;
+    public List<string> columns;
+    public string schemaJson;
+    public string imageBase64;
+    public string imageFormat;
 
-    /// <summary>
-    /// User-friendly display name for the chart.
-    /// </summary>
-    public string DisplayName => $"{char.ToUpper(chartType[0]) + chartType.Substring(1)} - {char.ToUpper(dataName[0]) + dataName.Substring(1)}";
+    public string DisplayName
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(chartName)) return chartName;
+            string variantSuffix = string.IsNullOrEmpty(variant) ? "" : $" ({variant})";
+            return $"{Capitalize(chartType)} - {Capitalize(dataName)}{variantSuffix}";
+        }
+    }
 
-    /// <summary>
-    /// Check if all required files are present.
-    /// </summary>
     public bool IsComplete => !string.IsNullOrEmpty(jsonFilePath);
 
-    /// <summary>
-    /// Get full path to JSON file.
-    /// </summary>
     public string GetFullJsonPath() => string.IsNullOrEmpty(jsonFilePath)
         ? null
         : Path.Combine(Application.streamingAssetsPath, jsonFilePath);
 
-    /// <summary>
-    /// Get full path to PNG preview file (optional).
-    /// </summary>
     public string GetFullPngPath() => string.IsNullOrEmpty(pngFilePath)
         ? null
         : Path.Combine(Application.streamingAssetsPath, pngFilePath);
+
+    private static string Capitalize(string s) =>
+        string.IsNullOrEmpty(s) ? s : char.ToUpper(s[0]) + s.Substring(1);
 }
