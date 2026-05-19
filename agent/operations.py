@@ -147,6 +147,7 @@ def resolve_operation_targets_to_values(
 def build_operation_ack(rtd_cmd: dict) -> str:
     """
     Build an acknowledgment message for an operation.
+    return response
     """
     if not rtd_cmd or not isinstance(rtd_cmd, dict):
         return "I couldn't understand that operation."

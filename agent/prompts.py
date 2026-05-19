@@ -3,8 +3,6 @@ All prompts used by the agent.
 Centralized for easy discovery and editing.
 """
 
-from .context import agent_context
-
 # 1. get_intent_classification_prompt()     classify what the user wants
 # 2. [route to intent handler]              [handle_load_chart, image_analysis, operations, chart_overview, data_query, etc]
 #
@@ -24,31 +22,55 @@ from .context import agent_context
 # Intent Classification
 # =============================================================================
 
-INTENT_CLASSIFIER_SYSTEM_PROMPT = "You are a query classifier. Return only valid JSON in lower_case"
+INTENT_CLASSIFIER_SYSTEM_PROMPT = (
+    "You are a query classifier for a chart visualization system. "
+    "Return only valid JSON in lower_case. "
+    "The conversation history above (if any) shows what the user and assistant discussed previously. "
+    "Use that context to resolve vague or follow-up queries -- for example, "
+    "'what about Q3?' after a Q1 discussion should be classified as data_analysis about Q3, "
+    "and 'now zoom in on that' after a data response should be classified as operations."
+)
 
-def get_intent_classification_prompt(user_query: str) -> str:
+
+def get_intent_classification_prompt(user_query: str, history: list[dict] | None = None) -> str:
     """Prompt for classifying user intent and detecting deictic references."""
+    history_block = ""
+    if history:
+        lines = []
+        for msg in history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg["content"]
+            # Truncate long assistant messages to keep the prompt focused
+            if role == "Assistant" and len(content) > 200:
+                content = content[:200] + "..."
+            lines.append(f"{role}: {content}")
+        history_block = (
+            "\nCONVERSATION HISTORY (most recent turns -- use this to route the intent properly, if the current query does not have a clear intent, use the most recent one):\n"
+            + "\n".join(lines)
+            + "\n"
+        )
+
     return f"""
 You are a query classifier for a chart visualization system, the query that you will get is from an audio transcription,
-Pay attention to what actually does the user want.
-Query: "{user_query}"
+Pay attention to what the user actually wants.{history_block}
+Current query: "{user_query}"
 
 Return JSON with two fields:
 1. "intent" - a dictionary of one or more of:
-   - load_chart: requests to load, display, plot, or switch to a dataset or chart (e.g., "show the sales chart", "load GPU prices", "display the bar chart")
+   - load_chart: requests or command to load, display, plot, or switch to a dataset or chart (e.g., "show the sales chart", "load GPU prices", "display the bar chart")
 
-   - chart_overview: requests a high-level description or summary of the CURRENTLY LOADED chart (e.g., "what does this show?", "describe this chart", "what am I looking at?"). MUST be broad and summary-level. Do NOT use for questions about specific elements (e.g., "first line", "this bar", "highest point") — those belong to image_analysis or data_analysis.
+   - chart_overview: requests a high-level description or summary of the CURRENTLY LOADED chart (e.g., "what does this show?", "describe this chart", "what am I looking at?"). MUST be broad and summary-level. Do NOT use for questions about specific elements (e.g., "first line", "this bar", "highest point") -- those belong to image_analysis or data_analysis.
 
     - image_analysis: Use when the answer requires visual inspection of the 
     rendered chart. This includes: extracting visual properties (colors, 
     shapes, layout), counting elements (bars, lines), identifying by position
     or resolving WHICH specific element is being referenced before any 
     data operation. MUST precede data_analysis when the target element 
-    is identified visually rather than by name.
+    is identified visually rather than by name. 
 
    - touch_interaction: references something touched/highlighted on the chart
 
-   - data_analysis: comparisons, calculations, or statistics on the data — including aggregates (avg/min/max), distributions (t-distribution, histogram), correlations, regressions, or any quantitative analysis ONLY for calculations that can be done using python pandas
+   - data_analysis: comparisons, calculations, or statistics on the data -- including aggregates (avg/min/max), distributions (t-distribution, histogram), correlations, regressions, or any quantitative analysis ONLY for calculations that can be done using python pandas
 
    - trend: patterns, trends, or changes over time
 
@@ -133,7 +155,7 @@ Important constraints:
 {constraint_block}
 
 Task:
-- Give a brief, 3–4 sentence overview that:
+- Give a brief, 3-4 sentence overview that:
   - Starts with a clear chart title.
   - Explains what is on the X and Y axes.
   - Summarizes how {y_col} changes with respect to {x_col}.
@@ -154,22 +176,19 @@ _DATA_QUERY_PREFIX_BASE = """IMPORTANT:
 - Answer the question in a single tool call. Do not make exploratory calls before computing.
 - Statistical methods to use directly:
   - Correlation: df[col1].corr(df[col2])
-  - Linear regression / line of best fit: import numpy as np; np.polyfit(df[x], df[y], 1) → returns [slope, intercept]
+  - Linear regression / line of best fit: import numpy as np; np.polyfit(df[x], df[y], 1) -> returns [slope, intercept]
   - Summary stats: df[col].mean() / .median() / .std() / .min() / .max()
   - numpy is available for all statistical operations
 - Do NOT try to draw, plot, or visualize any charts. Do NOT use matplotlib, seaborn, or any plotting library. Just describe what you find in words.
 - When analyzing trends, describe the pattern verbally (e.g., "The values increase steadily from X to Y, then decrease...").
 - Do not add any text or explanation.
 - Only output the final result.
-- Example: Mean:840.7143. Average: 384.3232
+- Example: Mean:840.71. Average: 384.32
 """
 
 
-def get_data_query_prefix() -> str:
+def get_data_query_prefix(color_field: str | None, df_columns: list[str], df) -> str:
     """Build the pandas agent prefix, adding series-awareness when color_field is set."""
-    color_field = agent_context.get("color_field")
-    df_columns = agent_context.get("df_columns", [])
-
     prefix = _DATA_QUERY_PREFIX_BASE
 
     if color_field:
@@ -180,12 +199,11 @@ def get_data_query_prefix() -> str:
             "per-series or across all series. Always mention which series a value belongs to.\n"
         )
 
-    df = agent_context.get("df")
     if "visible" in df_columns and df is not None and not df["visible"].all():
         prefix += (
             "\n- The DataFrame has a `visible` column (boolean). Some rows are currently hidden "
             "on the user's chart. Always filter to `df[df['visible'] == True]` before computing. "
-            "Do NOT mention visibility in your response — just silently use the filtered data.\n"
+            "Do NOT mention visibility in your response -- just silently use the filtered data.\n"
         )
 
     return prefix
@@ -196,25 +214,21 @@ DATA_QUERY_PREFIX = _DATA_QUERY_PREFIX_BASE
 
 
 # =============================================================================
-# System Prompt (unified — single source of truth for the LangGraph chatbot)
+# System Prompt (unified -- single source of truth for the LangGraph chatbot)
 # =============================================================================
 
 
-def get_system_prompt(df_context_json: str) -> str:
-    """
-    Build the single system prompt for the LangGraph chatbot.
-
-    Merges what was previously split across get_chatbot_system_instructions()
-    (behavioural rules / maxims) and get_data_analyst_system_prompt()
-    (dataset preview / tool-use instructions) into one coherent prompt.
-    """
-    data_name = (
-        agent_context.get("active_layer")
-        or agent_context.get("data_name")
-        or "the current dataset"
-    )
-    x_field = agent_context.get("x_field") or "x-axis"
-    y_field = agent_context.get("y_field") or "y-axis"
+def get_system_prompt(
+    df_context_json: str,
+    data_name: str | None = None,
+    x_field: str | None = None,
+    y_field: str | None = None,
+    df=None,
+) -> str:
+    """Build the system prompt for the LangGraph chatbot."""
+    data_name = data_name or "the current dataset"
+    x_field = x_field or "x-axis"
+    y_field = y_field or "y-axis"
 
     prompt = f"""IMPORTANT:
 You are assisting with visualizing data related to {data_name}.
@@ -249,7 +263,7 @@ DATASET_PREVIEW (partial):
   4. Summarize the general pattern (e.g., stable, volatile, increasing, decreasing, cyclical).
 
 **Maxim of Quality**:
--All numeric values MUST be rounded to 4 decimal places, whenever rounding is done, let the user know in a short concise way.
+-All numeric values MUST be rounded to 2, whenever rounding is done, just say rounded.
 
 **Maxim of Manner**:
 - Present the context before the requested information. For example, if the user asks for a value for node coordinates (X,Y), the response should be something like 'In [X], the Y-axis-name was [value of Y-axis]'.
@@ -273,11 +287,22 @@ DATASET_PREVIEW (partial):
 
 **Causal Adequacy**:
 - Show your thought process step by step but do not present it to the user until they ask for it.
-- Do not ask the user for a time period or specific dates before answering. Always use the full dataset when responding.
+- Do not ask the user for a time period or specific dates before answering. Use the full dataset only when no specific element is referenced in the query or conversation history.
 - When the user says 'this chart', 'this data', or 'this dataset', they mean the chart in the current context.
+
+**Referencing data element**:
+- Priority order for determining the computation target:
+  1. **Explicit in current query** - if the user names a specific element (year, quarter, category, series name, value), always use that.
+  2. **Implicit from conversation history** - if the current query has no named target, scan the assistant's most recent messages for the last specific data element mentioned (x-axis values, category names, series names, or named subsets). Use that as the implicit target.
+  3. **Full dataset** - only fall back to the full dataset when neither the query nor the conversation history contains a specific element.
+  4. **Ask for clarification** - if the scope is still ambiguous and using the full dataset would not produce a meaningful answer, ask the user which element they mean.
+- Examples of implicit follow-ups: "what about its trend?", "and the average?", "how does it compare?" - these refer to the last discussed element, not the full dataset.
+
+CONVERSATION HISTORY:
+The messages preceding this system prompt contain the prior exchanges between you and the user.
+Use them to resolve implicit references - e.g. pronouns ("it", "that"), follow-up questions ("and the average?", "what about Q3?"), or any query that omits a subject that was discussed in a previous turn.
 """.strip()
 
-    df = agent_context.get("df")
     has_hidden = df is not None and "visible" in df.columns and not df["visible"].all()
     if has_hidden:
         prompt += "\n**Data Scope**:\n- Some data points are currently hidden on the chart. Use only visible=True rows when answering. Do not mention visibility in your response.\n"
@@ -352,7 +377,7 @@ def get_combine_multi_intent_responses_prompt(responses: dict[str,str]) -> str:
     return f"""
     Combine these response parts into a single, natural-sounding spoken response.
     Ensure it's concise, avoid repetition, and use plain English (no markdown).
-    Always round numerical answer to 4 decimal places and tell the use IF it is rounded by saying "rounded to four decimal places"
+    Do not change any of the response just combine.
 
     The format you are going to get is {{"intent":"response"}}
 
@@ -418,10 +443,10 @@ If no specific data points were referenced, return an empty array [].
 CRITICAL: You MUST return values EXACTLY as they appear in the lists above.
 
 Examples:
-- Response mentions "Electronics had the highest sales in Q4" → [{{"x": "Q4", "{color_col}": "Electronics"}}]
-- Response mentions "Q4 had the highest total" → [{{"x": "Q4"}}]
-- Response mentions "the average was 3.5" (no specific point) → []
-- Response mentions "the average for the Memory series is 503.57" (aggregate, no specific x-value cited) → []
+- Response mentions "Electronics had the highest sales in Q4" -> [{{"x": "Q4", "{color_col}": "Electronics"}}]
+- Response mentions "Q4 had the highest total" -> [{{"x": "Q4"}}]
+- Response mentions "the average was 3.5" (no specific point) -> []
+- Response mentions "the average for the Memory series is 503.57" (aggregate, no specific x-value cited) -> []
 
 Return only the JSON array, no explanation."""
 
@@ -437,11 +462,22 @@ If no specific data points were referenced, return an empty array [].
 
 CRITICAL: You MUST return values EXACTLY as they appear in the x-axis values list above.
 Do not abbreviate, shorten, or reformat them. Copy them character-for-character.
-For example, if the list contains "2024/Q1" and the response mentions "Q1 2024", return ["2024/Q1"] — not ["Q1 2024"] or ["Q1"].
+For example, if the list contains "2024/Q1" and the response mentions "Q1 2024", return ["2024/Q1"] -- not ["Q1 2024"] or ["Q1"].
 
 Examples:
-- Response mentions "Q1 2024 had the highest", x-values include "2024/Q1" → ["2024/Q1"]
-- Response mentions "2020 and 2021 were similar", x-values include "2020", "2021" → ["2020", "2021"]
-- Response mentions "the average was 3.5" (no specific point) → []
+- Response mentions "Q1 2024 had the highest", x-values include "2024/Q1" -> ["2024/Q1"]
+- Response mentions "2020 and 2021 were similar", x-values include "2020", "2021" -> ["2020", "2021"]
+- Response mentions "the average was 3.5" (no specific point) -> []
 
 Return only the JSON array, no explanation."""
+
+
+
+def get_load_chart_system_prompt()->str:
+    return """
+    """
+
+
+def get_load_chart_prompt()->str:
+    return """
+    """

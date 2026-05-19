@@ -6,13 +6,8 @@ Combines touch and speech interaction for exploring charts and data.
 """
 
 from .context import (
-    agent_context,
-    clear_followup,
-    mark_followup,
-    set_dataframe,
-    ensure_df_headers_in_context,
-    get_xy_cols,
-    get_graph_config,
+    get_df,
+    get_current_config,
     update_dataframe_from_layer,
 )
 
@@ -49,13 +44,8 @@ __version__ = "0.1.0"
 
 __all__ = [
     # Context
-    "agent_context",
-    "clear_followup",
-    "mark_followup",
-    "set_dataframe",
-    "ensure_df_headers_in_context",
-    "get_xy_cols",
-    "get_graph_config",
+    "get_df",
+    "get_current_config",
     "update_dataframe_from_layer",
     # Intent
     "classify_query",
