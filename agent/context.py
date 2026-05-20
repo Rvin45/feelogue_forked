@@ -1,71 +1,69 @@
 """
-Shared agent context and state management.
+Runtime state shared across modules.
+
+agent_context has been replaced by AgentState in graph.py.
+This module now holds only the live DataFrame (excluded from LangGraph
+checkpoints because pandas objects can't be serialized by MemorySaver)
+and the current thread ID used to address the graph checkpoint.
 """
-from typing import Optional
+import pandas as pd
 
-# Global context dict - holds runtime state
-agent_context: dict = {}
+# Module-level DataFrame ref -- never put into AgentState
+_df: pd.DataFrame | None = None
 
+# Module-level image ref -- survives thread ID rotations (image arrives via rtd_data_for_agent
+# before or independently of layer_data_update, so we can't rely on the checkpoint alone)
+_image_data: str | None = None
+_image_format: str | None = None
 
-def clear_followup():
-    """Clear follow-up conversation state."""
-    agent_context.pop("followup_stage", None)
-    agent_context.pop("followup_topic", None)
-    agent_context.pop("pending_chart_options", None)
+# Current LangGraph thread ID -- updated only when the active layer changes
+_current_thread_id: str = "default-1"
 
+# Track which layer owns the current thread so same-layer data updates
+# don't rotate the thread (and lose conversation history).
+_current_layer_name: str | None = None
+_dataset_version: int = 0
 
-def mark_followup(topic: Optional[str] = None):
-    """Mark that we're in a follow-up conversation."""
-    agent_context["followup_stage"] = True
-    if topic:
-        agent_context["followup_topic"] = topic
-
-
-def set_dataframe(df):
-    """Register a pandas DataFrame in context."""
-    import pandas as pd
-    agent_context["df"] = df
-    agent_context["df_columns"] = list(df.columns)
-    print(f"DataFrame registered with columns: {agent_context['df_columns']}")
+# Chart metadata index -- survives thread rotations (boot message arrives once,
+# before any layer loads, so the thread it lands in gets cleared on first layer switch).
+_chart_metadata_index: dict | None = None
 
 
-def ensure_df_headers_in_context():
-    """Ensure df_columns is up to date with the current DataFrame."""
-    df = agent_context.get("df")
-    if df is not None and hasattr(df, "columns"):
-        cols = list(df.columns)
-        if cols != agent_context.get("df_columns"):
-            agent_context["df_columns"] = cols
-    else:
-        agent_context["df_columns"] = []
+def get_df() -> pd.DataFrame | None:
+    return _df
 
 
-def register_dataset_columns(cols):
-    """Manually register column names."""
-    agent_context["df_columns"] = list(cols)
+def set_image_data(image_data: str | None, image_format: str | None = "png") -> None:
+    """Store the latest chart image so it survives thread ID rotations."""
+    global _image_data, _image_format
+    _image_data = image_data
+    _image_format = image_format or "png"
 
 
-def get_xy_cols() -> tuple:
-    """Get x and y column names from context."""
-    x = agent_context.get("x_field") or agent_context.get("first_column")
-    y = agent_context.get("y_field") or agent_context.get("selected_column")
-    return x, y
+def set_chart_metadata_index(index: dict) -> None:
+    """Store the chart catalog so it survives thread rotations."""
+    global _chart_metadata_index
+    _chart_metadata_index = index
 
 
-def get_graph_config() -> dict:
-    """Get LangGraph config with thread ID."""
+def get_current_config() -> dict:
     return {
-        "configurable": {"thread_id": agent_context.get("graph_thread_id", "default-1")},
-        "recursion_limit": 25,
+        "configurable": {"thread_id": _current_thread_id},
+        "recursion_limit": 30,
     }
 
 
-def update_dataframe_from_layer(msg: dict):
+def update_dataframe_from_layer(msg: dict) -> dict:
     """
-    Update agent context from a layer_data_update message.
-    Builds the runtime DataFrame and sets chart metadata.
+    Build a DataFrame from a layer_data_update MQTT message.
+    Updates the module-level df ref and returns a serializable metadata
+    patch suitable for graph.update_state().
+
+    Thread rotation only happens when the active layer *name* changes.
+    Updates to the same layer reuse the existing thread so conversation
+    history is preserved across data refreshes.
     """
-    import pandas as pd
+    global _df, _current_thread_id, _current_layer_name, _dataset_version
 
     layer_name = msg.get("layer_name", "unnamed")
     chart_type = msg.get("chart_type", "line")
@@ -73,13 +71,11 @@ def update_dataframe_from_layer(msg: dict):
 
     if not data_points:
         print(f"Warning: No data points in layer update for '{layer_name}'")
-        return
+        return {}
 
-    # Read field names from the message first (Unity sends these)
     x_field = msg.get("x_field")
     y_field = msg.get("y_field")
 
-    # Fall back to guessing from data point keys if not provided
     if not x_field or not y_field:
         sample = data_points[0]
         keys = list(sample.keys())
@@ -101,24 +97,44 @@ def update_dataframe_from_layer(msg: dict):
                 y_field = keys[1]
 
     df = pd.DataFrame(data_points)
+    _df = df
 
-    agent_context["df"] = df
-    agent_context["df_columns"] = list(df.columns)
-    agent_context["x_field"] = x_field
-    agent_context["y_field"] = y_field
-    agent_context["first_column"] = x_field
-    agent_context["selected_column"] = y_field
-    agent_context["chart_type"] = chart_type
-    agent_context["active_layer"] = layer_name
-    agent_context["color_field"] = msg.get("series_field")  # None when absent
-    agent_context["dataset_version"] = agent_context.get("dataset_version", 0) + 1
-    old_thread_id = agent_context.get("graph_thread_id")
-    agent_context["graph_thread_id"] = f"{layer_name}-{agent_context['dataset_version']}"
-    agent_context["graph_thread_initialized"] = False
+    from .graph import graph, clear_graph_thread
 
-    # Free memory for the old thread's LangGraph checkpoints
-    if old_thread_id:
-        from .graph import clear_graph_thread
-        clear_graph_thread(old_thread_id)
+    _dataset_version += 1
+    is_new_layer = (_current_layer_name != layer_name)
+
+    if is_new_layer:
+        old_thread_id = _current_thread_id
+        _current_thread_id = f"{layer_name}-{_dataset_version}"
+        _current_layer_name = layer_name
+        if old_thread_id and old_thread_id != _current_thread_id:
+            clear_graph_thread(old_thread_id)
+        print(f"[context] Layer changed '{old_thread_id}' -> '{_current_thread_id}' (new thread)")
+    else:
+        print(f"[context] Same layer '{layer_name}' updated (thread kept: '{_current_thread_id}')")
+
+    metadata_patch = {
+        "x_field": x_field,
+        "y_field": y_field,
+        "color_field": msg.get("series_field"),
+        "df_columns": list(df.columns),
+        "chart_type": chart_type,
+        "active_layer": layer_name,
+        "dataset_version": _dataset_version,
+    }
+
+    # Carry image data forward -- it may have arrived before this message.
+    if _image_data:
+        metadata_patch["image_data"] = _image_data
+        metadata_patch["image_format"] = _image_format
+
+    # Always carry the chart catalog forward -- the boot message lands in the
+    # initial thread which gets cleared on the first layer switch.
+    if _chart_metadata_index:
+        metadata_patch["chart_metadata_index"] = _chart_metadata_index
+
+    graph.update_state(get_current_config(), metadata_patch)
 
     print(f"DataFrame updated: {len(df)} rows, columns: {list(df.columns)}")
+    return metadata_patch
