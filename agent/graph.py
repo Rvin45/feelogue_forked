@@ -87,19 +87,19 @@ def classifier_node(state: AgentState) -> dict:
     user_query = state.get("user_query", "")
     messages = state.get("messages", [])
     print(f"[classifier_node] Classifying | history_msgs={len(messages)} | followup={state.get('followup_stage')}")
-    print(f"Current message history: {state.get("messages","No chat")}")
-    if state.get("followup_stage") and state.get("followup_topic") == "load_chart":
-        intents = [{"type": "load_chart", "query": user_query}]
-        has_deictic = False
-        print("[classifier_node] Followup override -> load_chart")
-    else:
-        result = classify_query(
-            user_query,
-            has_image=bool(state.get("image_data")),
-            messages=messages,
-        )
-        intents = result["intents"]
-        has_deictic = result["has_deictic"]
+    # print(f"Current message history: {state.get("messages","No chat")}")
+    # if state.get("followup_stage") and state.get("followup_topic") == "load_chart":
+    #     intents = [{"type": "load_chart", "query": user_query}]
+    #     has_deictic = False
+    #     print("[classifier_node] Followup override -> load_chart")
+    # else:
+    result = classify_query(
+        user_query,
+        has_image=bool(state.get("image_data")),
+        messages=messages,
+    )
+    intents = result["intents"]
+    has_deictic = result["has_deictic"]
 
     print(f"[classifier_node] Intents: {[i['type'] for i in intents]} | deictic={has_deictic}")
 
