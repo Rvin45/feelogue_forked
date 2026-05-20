@@ -172,7 +172,7 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
         return {
             "response": f"I could not find any chart loaded. Please check your setup",
             "rtd_command": None,
-            "followup_stage": True,
+            "followup_stage": False,
             "pending_chart_options": [],
         }
 
@@ -201,7 +201,7 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
         return {
             "response": f"I couldn't find a chart matching that. Available charts include: {', '.join(chart_names)}. Which would you like?",
             "rtd_command": None,
-            "followup_stage": True,
+            "followup_stage": False,
             "pending_chart_options": [],
         }
 
@@ -224,7 +224,7 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
     return {
         "response": f"I found a few possible charts: {', '.join(options)}. Which would you like?",
         "rtd_command": None,
-        "followup_stage": True,
+        "followup_stage": False,
         "pending_chart_options": pending,
     }
 
