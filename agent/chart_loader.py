@@ -5,8 +5,8 @@ from difflib import SequenceMatcher
 from .utils import _norm
 from .client import client
 from .utils import parse_llm_json
-
-
+from .config import OPENAI_MODEL
+from .prompts import get_load_chart_prompt, get_load_chart_system_prompt
 
 def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
     """
@@ -143,37 +143,37 @@ def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
 
 
 
-# def analyze_user_intent_with_context(user_query: str, context: dict) -> dict:
-#     """
-#     Resolve a load_chart request using chart_metadata_index.
-#     - If exactly one matching chart -> auto-load it.
-#     - If multiple (e.g., bar + line) -> ask user to choose.
+def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
+    """
+    Resolve a load_chart request using chart_metadata_index.
+    - If exactly one matching chart -> auto-load it.
+    - If multiple (e.g., bar + line) -> ask user to choose.
 
-#     Returns a dict with keys:
-#         response, rtd_command, followup_stage, pending_chart_options
-#     No longer mutates context -- the caller (load_chart_node) applies state patches.
-#     """
-#     metadata = context.get("chart_metadata_index") or {}
-#     if isinstance(metadata, dict) and "charts" in metadata:
-#         charts = metadata.get("charts", [])
-#     elif isinstance(metadata, list):
-#         charts = metadata
-#     else:
-#         charts = []
-#     print("Available charts:", charts)
+    Returns a dict with keys:
+        response, rtd_command, followup_stage, pending_chart_options
+    No longer mutates context -- the caller (load_chart_node) applies state patches.
+    """
+    metadata = state.get("chart_metadata_index") or {}
+    if isinstance(metadata, dict) and "charts" in metadata:
+        charts = metadata.get("charts", [])
+    elif isinstance(metadata, list):
+        charts = metadata
+    else:
+        charts = []
+    print("Available charts:", charts)
 
-#     resp = client.chat.completions.create(
-#         model=OPENAI_MODEL,
-#         messages=[
-#             {"role": "system", "content": OPERATIONS_SYSTEM_PROMPT},
-#             {"role": "user", "content": get_operations_extraction_prompt(user_query, x_values)},
-#         ],
-#         temperature=0,
-#     )
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[
+            {"role": "system", "content": get_load_chart_system_prompt()},
+            {"role": "user", "content": get_load_chart_prompt(charts=charts, query=user_query)},
+        ],
+        temperature=0,
+    )
 
-#     raw = (resp.choices[0].message.content or "").strip()
+    raw = (resp.choices[0].message.content or "").strip()
 
-#     result = parse_llm_json(raw, fallback={"operation": None, "target": None, "factor": None})
+    result = parse_llm_json(raw, fallback={"operation": None, "target": None, "factor": None})
 
 
 

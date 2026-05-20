@@ -478,6 +478,16 @@ def get_load_chart_system_prompt()->str:
     """
 
 
-def get_load_chart_prompt()->str:
-    return """
+def get_load_chart_prompt(charts:list, query:str)->str:
+    compiled_chart_information = ""
+    for chart in charts:
+        chart_id = chart.get("chart_id", None)
+        chart_id = chart.get("chart_id", None)
+        chart_id = chart.get("chart_id", None)
+        chart_id = chart.get("chart_id", None)
+        chart_id = chart.get("chart_id", None)
+
+    return f"""
+
+
     """
