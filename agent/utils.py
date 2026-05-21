@@ -188,3 +188,29 @@ def rewrite_long_lists_locally(text: str, max_per_sentence: int = 2, min_trigger
 
     prose = ". ".join(chunks) + "."
     return f"{prefix} {prose}" if prefix else prose
+
+def format_messages_to_str(messages: list, max_turns: int = 6) -> str:
+    lines = []
+    for msg in messages[-max_turns:]:
+        role = getattr(msg, "type", None)
+        content = getattr(msg, "content", "")
+        metadata = getattr(msg, "metadata", None) or {}
+
+        if role == "human":
+            intents = metadata.get("intent", [])
+            intent_str = f" [{', '.join(intents)}]" if intents else ""
+            lines.append(f"User{intent_str}: {content}")
+
+        elif role == "ai":
+            if len(content) > 200:
+                content = content[:200] + "..."
+            lines.append(f"Assistant: {content}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\nCONVERSATION HISTORY (most recent turns):\n"
+        + "\n".join(lines)
+        + "\n"
+    )

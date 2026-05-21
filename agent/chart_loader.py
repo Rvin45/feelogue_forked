@@ -160,7 +160,7 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
     # if state.get("followup_stage", None) and state.get("followup_stage", "") == "load_chart":
     #     return handle_load_chart_followup(user_query, state)
     
-    metadata = state.get("chart_metadata_index") or {}
+    metadata = state.get("chart_metadata_index",{})
     if isinstance(metadata, dict) and "charts" in metadata:
         charts = metadata.get("charts", [])
     elif isinstance(metadata, list):
@@ -175,12 +175,12 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
             "followup_stage": False,
             "pending_chart_options": [],
         }
-
+    messages = state.get("messages", [])
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": get_load_chart_system_prompt()},
-            {"role": "user", "content": get_load_chart_prompt(charts=charts, query=user_query)},
+            {"role": "user", "content": get_load_chart_prompt(charts=charts, query=user_query, messages=messages[-6:])},
         ],
         temperature=0,
         response_format={
@@ -191,6 +191,9 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
             },
         },
     )
+
+    print("classify query prompt:" + get_load_chart_prompt(charts, query=user_query, messages=messages[-6:]))
+
 
     raw = (resp.choices[0].message.content or "").strip()
     result = parse_llm_json(raw, fallback={"matches": []})

@@ -467,7 +467,12 @@ def post_process_node(state: AgentState) -> dict:
     print(f"[post_process_node] Final response: {final_response!r}")
     return {
         "final_response": final_response, 
-        "messages": [HumanMessage(content=state.get("current_query", ""),additional_kwargs = {"intent": [i["type"] for i in state.get("intents", [])]}), AIMessage(content=final_response)],
+        "messages": [
+        HumanMessage(
+            content=state.get("current_query", ""),
+            metadata={"intent": [i["type"] for i in state.get("intents", [])]}
+        ),
+        AIMessage(content=final_response)],
     }
 
 

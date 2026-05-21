@@ -3,6 +3,8 @@ All prompts used by the agent.
 Centralized for easy discovery and editing.
 """
 
+from .utils import format_messages_to_str
+
 # 1. get_intent_classification_prompt()     classify what the user wants
 # 2. [route to intent handler]              [handle_load_chart, image_analysis, operations, chart_overview, data_query, etc]
 #
@@ -32,23 +34,9 @@ INTENT_CLASSIFIER_SYSTEM_PROMPT = (
 )
 
 
-def get_intent_classification_prompt(user_query: str, history: list[dict] | None = None) -> str:
+def get_intent_classification_prompt(user_query: str, messages: list[dict] | None = None) -> str:
     """Prompt for classifying user intent and detecting deictic references."""
-    history_block = ""
-    if history:
-        lines = []
-        for msg in history:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            content = msg["content"]
-            # Truncate long assistant messages to keep the prompt focused
-            if role == "Assistant" and len(content) > 200:
-                content = content[:200] + "..."
-            lines.append(f"{role}: {content}")
-        history_block = (
-            "\nCONVERSATION HISTORY (most recent turns -- use this to route the intent properly, if the current query does not have a clear intent, use the most recent one):\n"
-            + "\n".join(lines)
-            + "\n"
-        )
+    history_block = format_messages_to_str(messages=messages)
 
     return f"""
 You are a query classifier for a chart visualization system, the query that you will get is from an audio transcription,
@@ -494,7 +482,7 @@ def get_load_chart_system_prompt() -> str:
     )
 
 
-def get_load_chart_prompt(charts: list, query: str) -> str:
+def get_load_chart_prompt(charts: list, query: str, messages:list[dict]) -> str:
     chart_lines = []
     for chart in charts:
         chart_id = chart.get("chart_id")
@@ -507,7 +495,7 @@ def get_load_chart_prompt(charts: list, query: str) -> str:
         )
 
     compiled_chart_information = "\n".join(chart_lines)
-
+    message_history = format_messages_to_str(messages)
     return f"""Available charts:
     {compiled_chart_information}
 
@@ -518,5 +506,8 @@ def get_load_chart_prompt(charts: list, query: str) -> str:
     - "chart_id": the integer ID of the chart
     - "chart_name": the name of the chart
     Order by relevance (best match first). Return an empty list if nothing matches.
+
+    Here is some message history that might help to resolve the query:
+    {message_history}
 
     Return ONLY the JSON object."""
