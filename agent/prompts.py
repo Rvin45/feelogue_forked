@@ -365,7 +365,11 @@ def get_combine_multi_intent_responses_prompt(responses: dict[str,str]) -> str:
     return f"""
     Combine these response parts into a single, natural-sounding spoken response.
     Ensure it's concise, avoid repetition, and use plain English (no markdown).
-    Do not change any of the response just combine.
+    Do not change any information about the response, only restructuring.
+
+    Dialogues are supposed to come at 
+    Example:
+
 
     The format you are going to get is {{"intent":"response"}}
 

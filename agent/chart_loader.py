@@ -156,9 +156,6 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
         response, rtd_command, followup_stage, pending_chart_options
     No longer mutates context -- the caller (load_chart_node) applies state patches.
     """
-
-    # if state.get("followup_stage", None) and state.get("followup_stage", "") == "load_chart":
-    #     return handle_load_chart_followup(user_query, state)
     
     metadata = state.get("chart_metadata_index",{})
     if isinstance(metadata, dict) and "charts" in metadata:
@@ -176,7 +173,8 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
             "pending_chart_options": [],
         }
     messages = state.get("messages", [])
-    resp = client.chat.completions.create(
+    # LLM as chart classifier
+    resp = client.chat.completions.create( 
         model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": get_load_chart_system_prompt()},
@@ -192,9 +190,6 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
         },
     )
 
-    print("classify query prompt:" + get_load_chart_prompt(charts, query=user_query, messages=messages[-6:]))
-
-
     raw = (resp.choices[0].message.content or "").strip()
     result = parse_llm_json(raw, fallback={"matches": []})
     matches = result.get("matches", [])
@@ -202,9 +197,9 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
     if not matches:
         chart_names = [ch.get("chart_name", ch.get("data_name", "unknown")) for ch in charts[:5]]
         return {
-            "response": f"I couldn't find a chart matching that. Available charts include: {', '.join(chart_names)}. Which would you like?",
+            "response": f"I couldn't find a chart matching that. Here is a few available charts: {', '.join(chart_names)}. Which would you like?",
             "rtd_command": None,
-            "followup_stage": False,
+            "followup_stage": True,
             "pending_chart_options": [],
         }
 
@@ -218,6 +213,13 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
                 "followup_stage": False,
                 "pending_chart_options": [],
             }
+        else:
+            return {
+            "response": f"I ran into a problem while loading {match.get("chart_name")}. Please try again",
+            "rtd_command": None,
+            "followup_stage": False,
+            "pending_chart_options": [],
+        }
 
     options = [m["chart_name"] for m in matches[:3]]
     pending = [
@@ -227,7 +229,7 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
     return {
         "response": f"I found a few possible charts: {', '.join(options)}. Which would you like?",
         "rtd_command": None,
-        "followup_stage": False,
+        "followup_stage": True,
         "pending_chart_options": pending,
     }
 

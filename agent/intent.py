@@ -38,9 +38,6 @@ def classify_query(user_query: str, has_image: bool = False, messages: list = No
         }
     })
 
-    print("classify query prompt:" + get_intent_classification_prompt(user_query, messages=messages[-6:]))
-    print(messages)
-
     raw = (resp.choices[0].message.content or "").strip()
     result = parse_llm_json(raw, fallback={"intents": [{"type":"general_question", "query":user_query}], "has_deictic": False})
     # Validate intents
