@@ -195,9 +195,9 @@ def analyze_user_intent_with_context(user_query: str, state: dict) -> dict:
     matches = result.get("matches", [])
 
     if not matches:
-        chart_names = [ch.get("chart_name", ch.get("data_name", "unknown")) for ch in charts[:5]]
+        chart_names = [ch.get("chart_name", ch.get("data_name", "unknown")) for ch in charts[:3]]
         return {
-            "response": f"I couldn't find a chart matching that. Here is a few available charts: {', '.join(chart_names)}. Which would you like?",
+            "response": f"I couldn't find a chart matching that. Here is a few available charts: {', '.join(chart_names)}.",
             "rtd_command": None,
             "followup_stage": True,
             "pending_chart_options": [],

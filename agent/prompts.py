@@ -51,7 +51,7 @@ Return JSON with two fields:
 
     - image_analysis: Use when the answer requires visual inspection of the 
     rendered chart. This includes: extracting visual properties (colors, 
-    shapes, layout), counting elements (bars, lines), identifying by position
+    shapes, layout, intersection), counting elements (bars, lines), identifying by position
     or resolving WHICH specific element is being referenced before any 
     data operation. MUST precede data_analysis when the target element 
     is identified visually rather than by name. 
@@ -67,7 +67,16 @@ Return JSON with two fields:
    - general_question: anything else, including general questions about how chart types work (e.g., "how do I read a bar chart?", "what is a scatterplot?")
     Choose the MOST specific intent(s). If multiple apply, include all relevant intents, but avoid over-classifying.    
     Separate out the query for each intent into "intent":"query". 
-    If multiple intents refer to the same subject (e.g., "each line", "this bar", "the chart"), you MUST explicitly repeat that subject in every intent query. Do NOT omit shared context. Each query must be fully self-contained and independently understandable. However, only include the question that needs to be resolved by that query intent.
+    For each intent, return "spans": a list of EXACT substrings copied verbatim from the
+    CURRENT user utterance only. Do not paraphrase, complete, correct, translate, or add
+    any word that is not present in the current utterance.
+
+    To carry a shared subject across intents (e.g. "the blue line"), repeat that subject as
+    its own span in each intent. The subject MUST appear in the current utterance — never
+    invent one or pull it from earlier turns.
+
+    Conversation history is provided ONLY to help you choose the intent TYPE. You must NOT
+    copy any entity, phrasing, or fact from history into spans.
     Example: "What is the blue color line average"
     Output:
     "intents": [
@@ -156,24 +165,26 @@ Task:
 # =============================================================================
 
 _DATA_QUERY_PREFIX_BASE = """IMPORTANT:
-- A pandas DataFrame named `df` is ALREADY loaded in your environment. ALWAYS use this `df` variable directly. NEVER create your own DataFrame or hardcode data values.
+- A pandas DataFrame named `df` is ALREADY loaded in your environment. ALWAYS use this `df` variable directly. NEVER create your own DataFrame, NEVER hardcode data values, and NEVER invent column names, categories, dates, or any other values.
+- `pd` (pandas) and `np` (numpy) are ALREADY imported and available. Do NOT add `import pandas` or `import numpy` lines - they will cause errors.
+- NEVER modify, overwrite, or reassign values in `df`. Treat it as read-only. If you need a transformed version, copy it with `df.copy()` and work on the copy.
 - NEVER return raw data directly.
+- If you do not know what columns exist, check `df.columns`. If you do not know the values in a column (e.g. month labels, category or series names), derive them from `df['col'].unique()`. NEVER assume, hardcode, or invent them from memory.
+- Prefer to ground and compute in a SINGLE tool call: derive any values you need inline (e.g. `month_order = df['month'].unique().tolist()`) rather than hardcoding them. Only make a separate exploratory call if you genuinely cannot proceed without first seeing the schema or values.
+- Do NOT call `.head()`, `.tail()`, or `.describe()` unless the user explicitly asks to see raw data. Go directly to the computation.
+- If a value cannot be grounded in the actual data, do NOT fabricate it - state what is missing.
 - If a query requires any computation, data analysis, or analyzing trend, you MUST generate and execute Python code using the python_repl_ast tool to provide an answer.
 - Do NOT answer the question directly without running code when calculations are needed.
-- Do NOT call `.head()`, `.tail()`, or `.describe()` unless the user explicitly asks to see raw data. Go directly to the computation.
-- Answer the question in a single tool call. Do not make exploratory calls before computing.
 - Statistical methods to use directly:
   - Correlation: df[col1].corr(df[col2])
-  - Linear regression / line of best fit: import numpy as np; np.polyfit(df[x], df[y], 1) -> returns [slope, intercept]
+  - Linear regression / line of best fit: np.polyfit(df[x], df[y], 1) -> returns [slope, intercept]
   - Summary stats: df[col].mean() / .median() / .std() / .min() / .max()
-  - numpy is available for all statistical operations
 - Do NOT try to draw, plot, or visualize any charts. Do NOT use matplotlib, seaborn, or any plotting library. Just describe what you find in words.
 - When analyzing trends, describe the pattern verbally (e.g., "The values increase steadily from X to Y, then decrease...").
 - Do not add any text or explanation.
 - Only output the final result.
 - Example: Mean:840.71. Average: 384.32
 """
-
 
 def get_data_query_prefix(color_field: str | None, df_columns: list[str], df) -> str:
     """Build the pandas agent prefix, adding series-awareness when color_field is set."""
@@ -206,7 +217,7 @@ DATA_QUERY_PREFIX = _DATA_QUERY_PREFIX_BASE
 # =============================================================================
 
 
-def get_system_prompt(
+def get_data_query_system_prompt(
     df_context_json: str,
     data_name: str | None = None,
     x_field: str | None = None,
@@ -251,7 +262,8 @@ DATASET_PREVIEW (partial):
   4. Summarize the general pattern (e.g., stable, volatile, increasing, decreasing, cyclical).
 
 **Maxim of Quality**:
--All numeric values MUST be rounded to 2, whenever rounding is done, just say rounded.
+- All numeric values to be rounded to 2 decimal points.
+- When reporting a value returned by the csv_query_tool, use the exact number as returned - never round, estimate, or paraphrase it to a different value.
 
 **Maxim of Manner**:
 - Present the context before the requested information. For example, if the user asks for a value for node coordinates (X,Y), the response should be something like 'In [X], the Y-axis-name was [value of Y-axis]'.
@@ -360,20 +372,35 @@ def get_rewrite_list_prompt(text: str) -> str:
     )
 
 
-def get_combine_multi_intent_responses_prompt(responses: dict[str,str]) -> str:
+def get_combine_multi_intent_responses_prompt(responses: dict[str, str], query: str) -> str:
     """Prompt for combining multiple response fragments into one coherent answer."""
     return f"""
-    Combine these response parts into a single, natural-sounding spoken response.
-    Ensure it's concise, avoid repetition, and use plain English (no markdown).
-    Do not change any information about the response, only restructuring.
+    Combine these response parts into a single, natural-sounding spoken response for Graphy, an accessible data visualisation system for blind and low-vision users.
+    The response will be spoken aloud by a TTS service.
 
-    Dialogues are supposed to come at 
+    Rules:
+    - Frontload the information that directly answers the query; supporting detail comes after.
+    - Be concise and avoid repetition across parts.
+    - Plain English only: no markdown, no bullet points, no surrounding quotes.
+    - Do not add, remove, or alter any factual information. Restructure and merge only.
+    - If only one response part is given, just clean it up; do not pad it.
+    - Output the combined response only, with no preamble or labels.
+
     Example:
+    Query: What is the average of the blue line
+    Responses:
+    {{
+        "image_analysis": "The blue line represents the revenue line",
+        "data_analysis": "The revenue line average is 26.20AUD"
+    }}
+    Output: 26.20AUD is the revenue line average, represented in blue
 
+    The input format is {{"intent": "response"}}.
 
-    The format you are going to get is {{"intent":"response"}}
+    Query:
+    {query}
 
-    Response parts:
+    Responses:
     {responses}
 
     Combined response:
@@ -385,17 +412,19 @@ def get_combine_multi_intent_responses_prompt(responses: dict[str,str]) -> str:
 # =============================================================================
 
 IMAGE_ANALYSIS_SYSTEM_PROMPT = (
-    "Every response must begin with the exact phrase 'From the image...' "
+    "You are a image analysis system for accessible data visualisation for blind and low vision people."
+    "Every response must end with  'from the image' to indicate that the information should be treated with caution"
     "and be written in plain conversational text only. "
     "Do not use markdown, bullet points, bold, asterisks, headers, or newlines for formatting. "
     "Write as if speaking aloud to someone. "
-    "Answer only the user's specific question. Be concise. "
+    "Your answer will be spoken aloud by a TTS service"
     "Base answers solely on what is visible in the image. "
     "If something cannot be determined from the image, say: "
     "'This cannot be determined from the image alone.' "
     "DO NOT GIVE ANY NUMBERS EXCEPT FOR INTERSECTION"
+    "You can ask further question if you need to"
     "Use simple color names. Use qualifiers like 'around' or 'roughly' when estimating. "
-    "Example: From the image, the two lines intersect around 2021 near a value of 50."
+    "Example: Two lines intersect around 2021 near a value of 50 from the image."
 ).strip()
 
 

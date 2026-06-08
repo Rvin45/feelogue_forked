@@ -17,7 +17,7 @@ from .state import AgentState
 from .data_query import csv_query_tool, update_state_ref
 from .intent import classify_query
 from .prompts import (
-    get_system_prompt,
+    get_data_query_system_prompt,
     get_chart_overview_prompt,
     IMAGE_ANALYSIS_SYSTEM_PROMPT,
     CHART_OVERVIEW_SYSTEM_PROMPT,
@@ -40,7 +40,7 @@ from .utils import strip_markdown
 # LLM + tool setup
 # =============================================================================
 
-_main_llm = ChatOpenAI(model=OPENAI_MODEL_ANALYSIS, temperature=0.5)
+_main_llm = ChatOpenAI(model=OPENAI_MODEL_ANALYSIS, temperature=0)
 _tools = [csv_query_tool]
 _tools_by_name = {t.name: t for t in _tools}
 _llm_with_tools = _main_llm.bind_tools(_tools)
@@ -328,7 +328,6 @@ def chart_overview_node(state: AgentState) -> dict:
         print(f"Warning: GPT overview fallback due to: {e}")
         response = f"This {chart_type} chart shows how {y_col} changes with respect to {x_col}."
 
-    print(f"[chart_overview_node] Generated overview: {response[:80]!r}...")
     return {"intent_responses": {state["current_intent"]: response}, "followup_stage": False}
 
 
@@ -347,8 +346,7 @@ def data_query_node(state: AgentState) -> dict:
     df = get_df()
 
     query = state.get("current_query", "")
-    print(f"[data_query_node] Intent: {state.get('current_intent')!r} | Query: {query!r}")
-    print(f"[data_query_node] df={'loaded' if df is not None else 'None'} | dataset_version={state.get('dataset_version')} | history_msgs={len(state.get('messages', []))}")
+    print(f"[data_query_node] df={'loaded' if df is not None else 'None'} | dataset_version={state.get('dataset_version')} | history_msgs={len(state.get('messages', []))} | Intent: {state.get('current_intent')!r}")
     touchdata = state.get("touchdata", {})
     highlighted_context = state.get("highlighted_context", {})
 
@@ -365,8 +363,6 @@ def data_query_node(state: AgentState) -> dict:
         referent_parts.extend(highlight_info)
 
     enriched_query = f"{query} ({'; '.join(referent_parts)})" if referent_parts else query
-    if referent_parts:
-        print(f"[data_query_node] Enriched query: {enriched_query!r}")
 
     # Persist best referent for future deictic ops
     patch_referents = {}
@@ -402,11 +398,10 @@ def data_query_node(state: AgentState) -> dict:
         "chart_type": state.get("chart_type"),
         "dataset_version": state.get("dataset_version", 0),
         "df_columns": df_cols,
-        "messages": list(state.get("messages", []))[-6:],
     })
 
     # Build message list: system prompt + prior conversation + new query
-    system_msg = SystemMessage(content=get_system_prompt(
+    system_msg = SystemMessage(content=get_data_query_system_prompt(
         json.dumps(df_context),
         data_name=state.get("data_name") or state.get("active_layer") or "the current dataset",
         x_field=state.get("x_field") or "x-axis",
@@ -419,7 +414,6 @@ def data_query_node(state: AgentState) -> dict:
     start_time = time.time()
     response_text = _run_tool_loop(messages_for_llm)
     print(f"[data_query_node] Tool loop done in {time.time() - start_time:.2f}s")
-
     # Post-processing
     response_text = strip_markdown(response_text)
     rewritten = rewrite_long_node_lists_with_gpt(response_text)
@@ -458,7 +452,7 @@ def post_process_node(state: AgentState) -> dict:
 
     if len(intent_responses) > 1:
         print("[post_process_node] Merging multi-intent responses...")
-        final_response = combine_multi_intent_responses(intent_responses)
+        final_response = combine_multi_intent_responses(responses=intent_responses,query=state.get("user_query"))
     elif len(intent_responses) == 1:
         final_response = next(iter(intent_responses.values()))
     else:
