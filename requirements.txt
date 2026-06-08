@@ -9,10 +9,12 @@ langchain-community==0.3.26
 langchain-experimental==0.3.4
 langchain-core==0.3.68
 langgraph==0.4.8
+langgraph-checkpoint==2.0.26
 langgraph-prebuilt==0.2.2
 paho-mqtt==2.1.0
 together==1.5.17
 notebook==7.4.3
+google-genai>=1.0.0
 
 # RTD / chart generation
 beautifulsoup4==4.13.3

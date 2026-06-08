@@ -67,3 +67,9 @@ class AgentState(TypedDict):
 
     # Final assembled response — written by post_process_node
     final_response: str
+
+    # Evaluator fields - turn-scoped, reset by input_node each new user turn
+    evaluation_result: Optional[str]    # "answered" | "unanswered" | "intent_error"
+    evaluation_feedback: Optional[str]  # evaluator hint injected into classifier on retry
+    evaluation_followup: Optional[str]  # suggested follow-up question when unanswered
+    retry_count: int                    # evaluator-triggered retries within this turn

@@ -481,3 +481,49 @@ def get_load_chart_system_prompt()->str:
 def get_load_chart_prompt()->str:
     return """
     """
+
+
+# =============================================================================
+# Evaluator
+# =============================================================================
+
+EVALUATOR_SYSTEM_PROMPT = (
+    "You are a response quality evaluator for a chart data assistant. "
+    "Judge whether the assistant's response answered the user's question "
+    "and used the correct processing pathway. "
+    "Only flag intent_error when you are certain the wrong handler was invoked. "
+    "Only flag unanswered when the response is clearly evasive, off-topic, or incomplete. "
+    "Return only valid JSON."
+)
+
+
+def get_evaluator_prompt(
+    user_query: str,
+    intents_used: list,
+    final_response: str,
+    chart_context: dict = None,
+) -> str:
+    chart_block = ""
+    if chart_context:
+        parts = [f"{k}: {v}" for k, v in chart_context.items() if v]
+        if parts:
+            chart_block = "\nCHART CONTEXT:\n" + "\n".join(parts) + "\n"
+
+    intents_str = ", ".join(intents_used) if intents_used else "unknown"
+
+    return f"""Evaluate the assistant's response to the user's question.
+
+USER QUERY: "{user_query}"
+INTENT HANDLERS USED: {intents_str}
+{chart_block}
+ASSISTANT RESPONSE:
+\"\"\"{final_response}\"\"\"
+
+Criteria:
+1. answered: the response fully addresses the user's question.
+2. unanswered: the response is evasive, off-topic, or missing key information.
+3. intent_error: the wrong handler was used -- e.g., visual question answered without image_analysis, data question answered with load_chart only, operations query answered as plain text.
+
+If unanswered, provide a short follow-up question the user could ask to get the missing information.
+
+Return JSON with fields: result, feedback, followup_question.""".strip()

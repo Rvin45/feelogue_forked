@@ -43,6 +43,12 @@ OPENAI_MODEL_ANALYSIS = os.environ.get("OPENAI_MODEL_ANALYSIS", OPENAI_MODEL)
 OPENAI_MODEL_IMAGE = os.environ.get("OPENAI_MODEL_IMAGE", OPENAI_MODEL)
 
 # =============================================================================
+# Gemini (used by evaluate_node to avoid same-model bias)
+# =============================================================================
+GEMINI_API_KEY = _require("GEMINI_API_KEY")
+GEMINI_MODEL_EVALUATOR = os.environ.get("GEMINI_MODEL_EVALUATOR", "gemini-3.1-pro")
+
+# =============================================================================
 # MQTT
 # =============================================================================
 MQTT_HOST = _require("MQTT_REMOTE_HOST")
@@ -51,3 +57,4 @@ MQTT_USERNAME = _require("MQTT_REMOTE_USERNAME")
 MQTT_PASSWORD = _require("MQTT_REMOTE_PASSWORD")
 MQTT_TOPIC_IN = os.environ.get("MQTT_TOPIC_IN", "agent_in")
 MQTT_TOPIC_OUT = os.environ.get("MQTT_TOPIC_OUT", "agent_out")
+

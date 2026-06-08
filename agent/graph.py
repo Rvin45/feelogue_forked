@@ -11,7 +11,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from .config import OPENAI_MODEL, OPENAI_MODEL_ANALYSIS, OPENAI_MODEL_IMAGE
+import google.genai as _google_genai
+import google.genai.types as _google_genai_types
+from .config import OPENAI_MODEL, OPENAI_MODEL_ANALYSIS, OPENAI_MODEL_IMAGE, GEMINI_API_KEY, GEMINI_MODEL_EVALUATOR
 from .client import client
 from .state import AgentState
 from .data_query import csv_query_tool, update_state_ref
@@ -21,6 +23,8 @@ from .prompts import (
     get_chart_overview_prompt,
     IMAGE_ANALYSIS_SYSTEM_PROMPT,
     CHART_OVERVIEW_SYSTEM_PROMPT,
+    EVALUATOR_SYSTEM_PROMPT,
+    get_evaluator_prompt,
 )
 from .chart_loader import analyze_user_intent_with_context
 from .operations import (
@@ -34,11 +38,14 @@ from .postprocessing import (
     combine_multi_intent_responses,
 )
 from .touch_context import collect_touch_nodes, collect_highlight_nodes, _pick_best_node_values
-from .utils import strip_markdown
+from .schema import EVALUATOR_SCHEMA
+from .utils import strip_markdown, parse_llm_json
 
 # =============================================================================
 # LLM + tool setup
 # =============================================================================
+
+_gemini_client = _google_genai.Client(api_key=GEMINI_API_KEY)
 
 _main_llm = ChatOpenAI(model=OPENAI_MODEL_ANALYSIS, temperature=0.5)
 _tools = [csv_query_tool]
@@ -75,6 +82,10 @@ def input_node(state: AgentState) -> dict:
         "touch_nodes": {},
         "highlight_nodes": {},
         "final_response": "",
+        "evaluation_result": None,
+        "evaluation_feedback": None,
+        "evaluation_followup": None,
+        "retry_count": 0,
     }
 
 
@@ -86,15 +97,24 @@ def classifier_node(state: AgentState) -> dict:
     """Classify intents and detect deictic references with conversation history."""
     user_query = state.get("user_query", "")
     messages = state.get("messages", [])
-    print(f"[classifier_node] Classifying | history_msgs={len(messages)} | followup={state.get('followup_stage')}")
-    print(f"Current message history: {state.get("messages","No chat")}")
+    evaluation_feedback = state.get("evaluation_feedback")
+    retry_count = state.get("retry_count", 0)
+    print(f"[classifier_node] Classifying | history_msgs={len(messages)} | followup={state.get('followup_stage')} | retry={retry_count}")
+    print(f"Current message history: {state.get('messages','No chat')}")
     if state.get("followup_stage") and state.get("followup_topic") == "load_chart":
         intents = [{"type": "load_chart", "query": user_query}]
         has_deictic = False
         print("[classifier_node] Followup override -> load_chart")
     else:
+        query_for_classifier = user_query
+        if evaluation_feedback and retry_count > 0:
+            query_for_classifier = (
+                f"[EVALUATOR HINT - previous attempt was incorrect: {evaluation_feedback}] "
+                f"{user_query}"
+            )
+            print(f"[classifier_node] Injecting evaluator hint: {evaluation_feedback!r}")
         result = classify_query(
-            user_query,
+            query_for_classifier,
             has_image=bool(state.get("image_data")),
             messages=messages,
         )
@@ -470,11 +490,110 @@ def post_process_node(state: AgentState) -> dict:
     else:
         final_response = "I'm not sure how to help with that."
 
+    
+
     print(f"[post_process_node] Final response: {final_response!r}")
     return {
         "final_response": final_response, 
         "messages": [HumanMessage(content=state.get("current_query", ""),additional_kwargs = {"intent": [i["type"] for i in state.get("intents", [])]}), AIMessage(content=final_response)],
     }
+
+
+MAX_RETRIES = 1
+
+
+def evaluate_node(state: AgentState) -> dict:
+    """
+    Quality gate after post_process_node.
+    - intent_error: wrong handler was used -> retry via classifier_node with hint
+    - unanswered: response didn't address the query -> append follow-up suggestion, END
+    - answered: good response -> END
+    """
+    user_query = state.get("user_query", "")
+    final_response = state.get("final_response", "")
+    intents_used = [i["type"] for i in state.get("intents", [])]
+    retry_count = state.get("retry_count", 0)
+
+    print(f"[evaluate_node] retry_count={retry_count} | intents={intents_used} | response_len={len(final_response)}")
+
+    if retry_count >= MAX_RETRIES:
+        print(f"[evaluate_node] MAX_RETRIES={MAX_RETRIES} reached -- passing through to END")
+        return {
+            "evaluation_result": "answered",
+            "evaluation_feedback": None,
+            "evaluation_followup": None,
+            "retry_count": retry_count,
+        }
+
+    chart_context = {
+        "chart_type": state.get("chart_type"),
+        "data_name": state.get("data_name") or state.get("active_layer"),
+        "x_field": state.get("x_field"),
+        "y_field": state.get("y_field"),
+    }
+
+    try:
+        resp = _gemini_client.models.generate_content(
+            model=GEMINI_MODEL_EVALUATOR,
+            contents=get_evaluator_prompt(
+                user_query=user_query,
+                intents_used=intents_used,
+                final_response=final_response,
+                chart_context=chart_context,
+            ),
+            config=_google_genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=EVALUATOR_SCHEMA,
+                system_instruction=EVALUATOR_SYSTEM_PROMPT,
+                temperature=0,
+            ),
+        )
+        raw = (resp.text or "").strip()
+    except Exception as e:
+        print(f"[evaluate_node] Gemini call failed: {e} -- defaulting to answered")
+        return {
+            "evaluation_result": "answered",
+            "evaluation_feedback": None,
+            "evaluation_followup": None,
+            "retry_count": retry_count,
+        }
+
+    result = parse_llm_json(
+        raw,
+        fallback={"result": "answered", "feedback": "", "followup_question": None},
+    )
+    eval_result = result.get("result", "answered")
+    feedback = result.get("feedback", "")
+    followup = result.get("followup_question") or None  # Gemini returns "" instead of null
+
+    print(f"[evaluate_node] result={eval_result!r} | feedback={feedback!r} | followup={followup!r}")
+
+    updated_final_response = final_response
+    if eval_result == "unanswered" and followup:
+        updated_final_response = f"{final_response} {followup}".strip()
+        print("[evaluate_node] Appended follow-up question to final_response")
+
+    new_retry_count = retry_count + 1 if eval_result == "intent_error" else retry_count
+
+    return {
+        "evaluation_result": eval_result,
+        "evaluation_feedback": feedback if eval_result == "intent_error" else None,
+        "evaluation_followup": followup if eval_result == "unanswered" else None,
+        "final_response": updated_final_response,
+        "retry_count": new_retry_count,
+    }
+
+def route_after_evaluation(state: AgentState) -> str:
+    """Route to classifier_node on intent_error (within retry budget), else END."""
+    eval_result = state.get("evaluation_result", "answered")
+    retry_count = state.get("retry_count", 0)  # already incremented by evaluate_node on error
+
+    if eval_result == "intent_error" and retry_count <= MAX_RETRIES:
+        print(f"[route_after_evaluation] intent_error -> classifier_node (retry {retry_count})")
+        return "classifier_node"
+
+    print(f"[route_after_evaluation] {eval_result!r} -> END")
+    return END
 
 
 # =============================================================================
@@ -493,6 +612,7 @@ def _build_graph():
     builder.add_node("chart_overview_node", chart_overview_node)
     builder.add_node("data_query_node", data_query_node)
     builder.add_node("post_process_node", post_process_node)
+    builder.add_node("evaluate_node", evaluate_node)
 
     builder.set_entry_point("input_node")
     builder.add_edge("input_node", "classifier_node")
@@ -514,7 +634,12 @@ def _build_graph():
     for node_name in handler_nodes:
         builder.add_conditional_edges(node_name, loop_or_finish, finish_map)
 
-    builder.add_edge("post_process_node", END)
+    builder.add_edge("post_process_node", "evaluate_node")
+    builder.add_conditional_edges(
+        "evaluate_node",
+        route_after_evaluation,
+        {"classifier_node": "classifier_node", END: END},
+    )
 
     memory = MemorySaver()
     return builder.compile(checkpointer=memory), memory
