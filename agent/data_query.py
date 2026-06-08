@@ -1,6 +1,9 @@
 """
 Data query tool using pandas DataFrame agent.
 """
+import pandas as _pd
+import numpy as _np
+
 from langchain_openai import ChatOpenAI
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.tools import tool
@@ -55,9 +58,17 @@ def _get_executor(df, selected_data, columns_to_use: list):
             allow_dangerous_code=True,
             agent_type="openai-tools",
             prefix=get_data_query_prefix(color_field, df_columns, df),
-            max_iterations=6,
+            max_iterations=3,
             agent_executor_kwargs={"handle_parsing_errors": True},
         )
+        for t in _cached_executor.tools:
+            if hasattr(t, "locals") and isinstance(t.locals, dict):
+                t.locals.setdefault("pd", _pd)
+                t.locals.setdefault("np", _np)
+                if hasattr(t, "globals") and isinstance(t.globals, dict):
+                    t.globals.setdefault("pd", _pd)
+                    t.globals.setdefault("np", _np)
+                break
         _cached_version = version
         _cached_df_id = df_id
         _cached_columns = cols
