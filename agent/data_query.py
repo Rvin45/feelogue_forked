@@ -3,10 +3,12 @@ Data query tool using pandas DataFrame agent.
 """
 import pandas as _pd
 import numpy as _np
+from typing import Annotated
 
 from langchain_openai import ChatOpenAI
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from .config import OPENAI_MODEL_ANALYSIS
 from .prompts import get_data_query_prefix
@@ -14,19 +16,8 @@ from .prompts import get_data_query_prefix
 # LLM for CSV/data queries - temperature=0 for reliable tool-call compliance
 csv_llm = ChatOpenAI(model=OPENAI_MODEL_ANALYSIS, temperature=0, stop=None)
 
-# Side-channel written by data_query_node before the tool loop runs.
-# Holds scalar state fields (x_field, y_field, etc.) so csv_query_tool can
-# read them without receiving parameters (tool signature is fixed to query: str).
-_state_ref: dict = {}
-
-
-def update_state_ref(patch: dict) -> None:
-    """Called by data_query_node to give csv_query_tool current field metadata."""
-    _state_ref.update(patch)
-
-
 # Cache for the pandas agent executor -- rebuilt only when dataset or columns change.
-# dataset_version from _state_ref is the cache key: it increments on every
+# dataset_version from state is the cache key: it increments on every
 # layer_data_update so a new DataFrame always gets a fresh executor.
 _cached_executor = None
 _cached_version = None
@@ -34,11 +25,11 @@ _cached_df_id = None
 _cached_columns = None
 
 
-def _get_executor(df, selected_data, columns_to_use: list):
+def _get_executor(df, selected_data, columns_to_use: list, state: dict):
     """Return a pandas agent executor, reusing the cached one when nothing changed."""
     global _cached_executor, _cached_version, _cached_df_id, _cached_columns
 
-    version = _state_ref.get("dataset_version")
+    version = state.get("dataset_version")
     df_id = id(df)
     cols = tuple(columns_to_use)
 
@@ -48,8 +39,8 @@ def _get_executor(df, selected_data, columns_to_use: list):
         or df_id != _cached_df_id
         or cols != _cached_columns
     ):
-        color_field = _state_ref.get("color_field")
-        df_columns = _state_ref.get("df_columns", [])
+        color_field = state.get("color_field")
+        df_columns = state.get("df_columns", [])
         print(f"Building pandas agent executor (version={version}, columns={cols})")
         _cached_executor = create_pandas_dataframe_agent(
             csv_llm,
@@ -83,7 +74,10 @@ def _get_executor(df, selected_data, columns_to_use: list):
 
 
 @tool
-def csv_query_tool(query: str) -> str:
+def csv_query_tool(
+    query: str,
+    state: Annotated[dict, InjectedState],
+) -> str:
     """
     Query the currently loaded chart's underlying data to compute exact values.
 
@@ -120,11 +114,11 @@ def csv_query_tool(query: str) -> str:
                 "Please load a chart first, and then ask your question again."
             )
 
-        x_field = _state_ref.get("x_field") or (df.columns[0] if len(df.columns) > 0 else None)
-        y_field = _state_ref.get("y_field") or (df.columns[-1] if len(df.columns) > 1 else None)
-        chart_type = (_state_ref.get("chart_type") or "").lower()
-        color_field = _state_ref.get("color_field")
-        second_column = _state_ref.get("second_column")
+        x_field = state.get("x_field") or (df.columns[0] if len(df.columns) > 0 else None)
+        y_field = state.get("y_field") or (df.columns[-1] if len(df.columns) > 1 else None)
+        chart_type = (state.get("chart_type") or "").lower()
+        color_field = state.get("color_field")
+        second_column = state.get("second_column")
 
         if chart_type in {"bar", "line"} and x_field and y_field and {x_field, y_field}.issubset(df.columns):
             columns_to_use = [x_field, y_field]
@@ -139,9 +133,9 @@ def csv_query_tool(query: str) -> str:
             columns_to_use.append("visible")
 
         selected_data = df[columns_to_use]
-        executor = _get_executor(df, selected_data, columns_to_use)
+        executor = _get_executor(df, selected_data, columns_to_use, state)
 
-        chat_history = _state_ref.get("messages") or []
+        chat_history = state.get("messages") or []
         result = executor.invoke({"input": query, "chat_history": chat_history})
         if isinstance(result, str):
             return result

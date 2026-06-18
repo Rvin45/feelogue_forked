@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from .config import OPENAI_MODEL, OPENAI_MODEL_ANALYSIS, OPENAI_MODEL_IMAGE
 from .client import client
 from .state import AgentState
-from .data_query import csv_query_tool, update_state_ref
+from .data_query import csv_query_tool
 from .intent import classify_query
 from .prompts import (
     get_data_query_system_prompt,
@@ -45,17 +45,22 @@ _tools_by_name = {t.name: t for t in _tools}
 _llm_with_tools = _main_llm.bind_tools(_tools)
 _max_iter : int = 6 # number of iteration that data query is allowed to run
 
-def _run_tool_loop(messages: list, max_iterations: int = 6) -> str:
-    """Synchronous tool-calling loop. Returns the final text response."""
+def _run_tool_loop(messages: list, state: dict, max_iterations: int = 6) -> str:
+    """Synchronous tool-calling loop. Returns the final text response.
+
+    `state` is merged into each tool call's args so tools annotated with
+    InjectedState receive it -- that annotation is only auto-filled by
+    LangGraph's ToolNode, which this hand-rolled loop doesn't use.
+    """
     msgs = list(messages)
     for _ in range(max_iterations):
         response = _llm_with_tools.invoke(msgs)
         msgs.append(response)
         if not response.tool_calls:
-            # print("messages from tool loop",msgs)        
+            # print("messages from tool loop",msgs)
             return response.content or ""
         for tc in response.tool_calls:
-            result = _tools_by_name[tc["name"]].invoke(tc["args"])
+            result = _tools_by_name[tc["name"]].invoke({**tc["args"], "state": state}) 
             msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
     # print("messages from tool loop",msgs)
     return msgs[-1].content or ""
@@ -381,17 +386,6 @@ def data_query_node(state: AgentState) -> dict:
         "tail": tail,
     }
 
-    # Write scalar field metadata + recent messages so csv_query_tool can read them.
-    # Messages are capped at 6 (3 turns) to keep the pandas agent context focused.
-    update_state_ref({
-        "x_field": state.get("x_field"),
-        "y_field": state.get("y_field"),
-        "color_field": state.get("color_field"),
-        "chart_type": state.get("chart_type"),
-        "dataset_version": state.get("dataset_version", 0),
-        "df_columns": df_cols,
-    })
-
     # Build message list: system prompt + prior conversation + new query
     system_msg = SystemMessage(content=get_data_query_system_prompt(
         json.dumps(df_context),
@@ -403,7 +397,7 @@ def data_query_node(state: AgentState) -> dict:
     ))
     messages_for_llm = [system_msg] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
 
-    response_text = _run_tool_loop(messages_for_llm)
+    response_text = _run_tool_loop(messages_for_llm, state)
     print(f"response from tool loop: \n {response_text}")
     # Post-processing
     response_text = strip_markdown(response_text)
