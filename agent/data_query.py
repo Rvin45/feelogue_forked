@@ -63,11 +63,15 @@ def _get_executor(df, selected_data, columns_to_use: list):
         )
         for t in _cached_executor.tools:
             if hasattr(t, "locals") and isinstance(t.locals, dict):
-                t.locals.setdefault("pd", _pd)
-                t.locals.setdefault("np", _np)
+                merged = {}
                 if hasattr(t, "globals") and isinstance(t.globals, dict):
-                    t.globals.setdefault("pd", _pd)
-                    t.globals.setdefault("np", _np)
+                    merged.update(t.globals)
+                merged.update(t.locals)
+                merged.setdefault("pd", _pd)
+                merged.setdefault("np", _np)
+                t.locals = merged
+                if hasattr(t, "globals"):
+                    t.globals = merged
                 break
         _cached_version = version
         _cached_df_id = df_id
@@ -81,10 +85,32 @@ def _get_executor(df, selected_data, columns_to_use: list):
 @tool
 def csv_query_tool(query: str) -> str:
     """
-    Handles general queries on the currently loaded chart data.
-    Reads the DataFrame from context.get_df(), filters to relevant columns,
-    and delegates to a pandas DataFrame agent with python_repl_ast.
+    Query the currently loaded chart's underlying data to compute exact values.
+
+    Use this whenever answering requires a real number, aggregate, comparison,
+    ranking, extreme, or filtered subset that you cannot read directly from the
+    chart context or conversation. This is the ONLY way to get true values from
+    the data — never answer a numeric/factual question from memory or the preview.
+
+    Args:
+        query: A single, self-contained analytical QUESTION in natural language
+            (NOT pandas code). A separate execution agent translates it into
+            pandas, runs it against the real DataFrame, and returns the computed
+            result. State the operation explicitly: the target column, the
+            aggregation (sum/mean/count/max/min/corr...), any filters, grouping,
+            and sort order. Reference columns and category/series values by their
+            EXACT names as they appear in the schema and grounded value lists —
+            do not paraphrase, pluralize, or invent names. Ask for one complete
+            thing per call.
+
+    Returns:
+        On success: the computed value(s) as a short string (e.g. "Mean: 840.71").
+        When a filter matches no rows (e.g. a series/category that isn't in the
+        data): a line beginning "NOT_FOUND:" naming what was missing — treat this
+        as "no such data", NOT as zero, and do not report it to the user verbatim.
+        If no data is loaded or an error occurs: a plain-language message saying so.
     """
+    print("query inside csv query", query)
     try:
         from .context import get_df
         df = get_df()
