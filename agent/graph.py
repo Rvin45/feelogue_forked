@@ -71,7 +71,7 @@ def _run_tool_loop(messages: list, state: dict, max_iterations: int = 6) -> str:
 # =============================================================================
 
 def input_node(state: AgentState) -> dict:
-    """Reset all turn-scoped output fields at the start of each invocation."""
+    """Entry point of langgraph"""
     print(f"[input_node],message length: {len(state.get("messages"))}")
     return {
         "rtd_command": None,

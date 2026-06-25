@@ -189,7 +189,7 @@ def rewrite_long_lists_locally(text: str, max_per_sentence: int = 2, min_trigger
     prose = ". ".join(chunks) + "."
     return f"{prefix} {prose}" if prefix else prose
 
-def format_messages_to_str(messages: list, max_turns: int = 6) -> str:
+def format_messages_to_str(messages: list, max_turns: int = 8) -> str:
     lines = []
     for msg in messages[-max_turns:]:
         role = getattr(msg, "type", None)

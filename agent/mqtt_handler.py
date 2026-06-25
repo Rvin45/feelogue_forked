@@ -23,7 +23,7 @@ from .config import (
 _mqtt_client = None
 
 
-def on_message(client, userdata, msg):
+def on_message(client, msg):
     """Handle inbound MQTT messages."""
     payload = msg.payload.decode('utf-8', errors='ignore').strip()
     print(f"\nReceived: {payload[:200]}...")
