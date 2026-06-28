@@ -10,7 +10,7 @@ from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from utils import format_messages_to_str
+from .utils import format_messages_to_str
 from .config import OPENAI_MODEL_ANALYSIS
 from .prompts import get_data_query_prefix
 
@@ -136,7 +136,7 @@ def csv_query_tool(
         selected_data = df[columns_to_use]
         executor = _get_executor(df, selected_data, columns_to_use, state)
 
-        chat_history = format_messages_to_str(state.get("messages"), "")
+        chat_history = format_messages_to_str(state.get("messages"))
         result = executor.invoke({"input": query, "chat_history": chat_history})
         if isinstance(result, str):
             return result
