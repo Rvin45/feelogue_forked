@@ -47,7 +47,7 @@ _tools_by_name = {t.name: t for t in _tools}
 _llm_with_tools = _main_llm.bind_tools(_tools)
 _max_iter : int = 6 # number of iteration that data query is allowed to run
 
-def _run_tool_loop(state: dict, enriched_query:str, max_iterations: int = 6) -> str:
+def _run_tool_loop(state: AgentState , enriched_query:str, max_iterations: int = 6) -> str:
     """Synchronous tool-calling loop. Returns the final text response.
 
     `state` is merged into each tool call's args so tools annotated with
@@ -75,7 +75,6 @@ def _run_tool_loop(state: dict, enriched_query:str, max_iterations: int = 6) -> 
     iters_left = max_iterations
     # Build message list: system prompt (placeholder, filled in each loop iteration) + prior conversation + new query
     msgs_for_llm = [SystemMessage(content="")] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
-
     for _ in range(max_iterations):
         # Rebuild the system prompt each iteration so the LLM knows how many iterations remain
         msgs_for_llm[0] = SystemMessage(content=get_data_query_system_prompt(
@@ -85,6 +84,8 @@ def _run_tool_loop(state: dict, enriched_query:str, max_iterations: int = 6) -> 
             x_field=state.get("x_field") or "x-axis",
             y_field=state.get("y_field") or "y-axis",
             df=df,
+            vega_lite_schema=state.get("vega_lite_schema")
+            
         ))
         response = _llm_with_tools.invoke(msgs_for_llm)
         msgs_for_llm.append(response)
@@ -400,7 +401,8 @@ def data_query_node(state: AgentState) -> dict:
         if best_nv:
             patch_referents["last_referent_node_values"] = best_nv
 
-    response_text = _run_tool_loop(state, enriched_query)
+    response_text = _run_tool_loop(state=state, enriched_query=enriched_query)
+
     print(f"response from tool loop: \n {response_text}")
     # Post-processing
     response_text = strip_markdown(response_text)

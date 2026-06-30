@@ -217,3 +217,55 @@ def format_messages_to_str(messages: list) -> str:
         + "\n".join(lines)
         + "\n"
     )
+
+def trim_schema_data(schema : dict, n : int=5) -> dict:
+    """
+    Keep only the first n and last n rows in schema["data"]["values"].
+    Annotates rows as head/tail and inserts a marker showing omitted rows.
+
+    Args:
+        schema (dict): schema containing data.values
+        n (int): number of rows to keep from head and tail
+
+    Returns:
+        dict: modified schema
+    """
+
+    from copy import deepcopy
+
+    if not schema:
+        return schema or {}
+    # Avoid changing original schema
+    trimmed_schema = deepcopy(schema)
+    for key in ("image_data", "image_format", "overview", "metadata"):
+        trimmed_schema.pop(key, None)
+    trimmed_schema.setdefault("data", {})
+
+    values = trimmed_schema["data"].get("values", [])
+
+    # Small datasets: keep everything
+    if len(values) <= 2 * n:
+        trimmed_schema["data"]["values"] = [
+            {"_sample_position": "all", **row}
+            for row in values
+        ]
+        return trimmed_schema
+
+    head = [
+        {"_sample_position": "head", **row}
+        for row in values[:n]
+    ]
+
+    tail = [
+        {"_sample_position": "tail", **row}
+        for row in values[-n:]
+    ]
+
+    removed = [{
+        "_sample_position": "removed",
+        "message": f"{len(values) - (2*n)} rows removed"
+    }]
+
+    trimmed_schema["data"]["values"] = head + removed + tail
+    print("trimmed schema:", trimmed_schema)
+    return trimmed_schema

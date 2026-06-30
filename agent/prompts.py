@@ -214,6 +214,7 @@ def get_data_query_system_prompt(
     x_field: str | None = None,
     y_field: str | None = None,
     df=None,
+    vega_lite_schema: str = ''
 ) -> str:
     """Build the system prompt for the LangGraph chatbot."""
     data_name = data_name or "the current dataset"
@@ -353,6 +354,13 @@ Use them to resolve implicit references - e.g. pronouns ("it", "that"), follow-u
     has_hidden = df is not None and "visible" in df.columns and not df["visible"].all()
     if has_hidden:
         prompt += "\n**Data Scope**:\n- Some data points are currently hidden on the chart. Use only visible=True rows when answering. Do not mention visibility in your response.\n"
+    if vega_lite_schema:
+        print(vega_lite_schema)
+        prompt += f"""
+        Here is a VegaLite schema for the chart that is being displayed on Graphy, note that the data on the VegaLite schema has been trimmed only showing head and tail of the data. 
+        Use this to infer about information that the user might ask for:
+        {vega_lite_schema}
+        """
 
     return prompt
 
