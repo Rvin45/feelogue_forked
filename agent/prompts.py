@@ -98,7 +98,10 @@ CHART_OVERVIEW_SYSTEM_PROMPT = "You are a helpful assistant."
 
 
 def get_chart_overview_prompt(
-    x_col: str, y_col: str, chart_type: str, color_col: str | None = None
+    x_col: str, 
+    y_col: str, 
+    chart_type: str, 
+    color_col: str | None = None
 ) -> str:
     """Prompt for generating chart overview."""
     if color_col:
@@ -206,11 +209,11 @@ def get_data_query_prefix(color_field: str | None, df_columns: list[str], df) ->
 
 def get_data_query_system_prompt(
     df_context_json: str,
+    iterations_left:str | int,
     data_name: str | None = None,
     x_field: str | None = None,
     y_field: str | None = None,
     df=None,
-    max_iter = 3
 ) -> str:
     """Build the system prompt for the LangGraph chatbot."""
     data_name = data_name or "the current dataset"
@@ -225,7 +228,7 @@ You are a helpful and proactive data visualization assistant helping blind users
 
 All code execution must be performed via the csv_query_tool.
 Do not output raw code in the end. Any actions requiring code execution must be done via valid tool calls.
-You have minimum of {max_iter} iterations to solve the problem, break down the problem to evaluate the output at each step, in order to not miss details
+You have {iterations_left} iterations left to solve the problem, break down the problem to evaluate the output at each step, in order to not miss details
 You MUST NEVER mention something that does not exist that the user never mentioned.
 
 The DATASET_PREVIEW below shows ONLY the first and last few rows. There is more data in between.

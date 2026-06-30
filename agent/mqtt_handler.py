@@ -23,7 +23,7 @@ from .config import (
 _mqtt_client = None
 
 
-def on_message(client, msg):
+def on_message(client, userdata, msg):
     """Handle inbound MQTT messages."""
     payload = msg.payload.decode('utf-8', errors='ignore').strip()
     print(f"\nReceived: {payload[:200]}...")
@@ -86,6 +86,7 @@ def on_message(client, msg):
         schema = rtd_data.get("schema") or {}
         encoding = schema.get("encoding") or {}
         patch["color_field"] = (encoding.get("color") or {}).get("field") or None
+
         overview = schema.get("overview")
         if overview:
             patch["chart_overview"] = overview
