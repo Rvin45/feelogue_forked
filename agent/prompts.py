@@ -355,7 +355,6 @@ Use them to resolve implicit references - e.g. pronouns ("it", "that"), follow-u
     if has_hidden:
         prompt += "\n**Data Scope**:\n- Some data points are currently hidden on the chart. Use only visible=True rows when answering. Do not mention visibility in your response.\n"
     if vega_lite_schema:
-        print(vega_lite_schema)
         prompt += f"""
         Here is a VegaLite schema for the chart that is being displayed on Graphy, note that the data on the VegaLite schema has been trimmed only showing head and tail of the data. 
         Use this to infer about information that the user might ask for:

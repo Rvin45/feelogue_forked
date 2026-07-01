@@ -267,5 +267,4 @@ def trim_schema_data(schema : dict, n : int=5) -> dict:
     }]
 
     trimmed_schema["data"]["values"] = head + removed + tail
-    print("trimmed schema:", trimmed_schema)
     return trimmed_schema
