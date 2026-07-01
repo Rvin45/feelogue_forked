@@ -34,6 +34,8 @@ from .postprocessing import (
 )
 from .touch_context import collect_touch_nodes, collect_highlight_nodes, _pick_best_node_values
 from .utils import strip_markdown
+from .context import get_df
+
 
 # =============================================================================
 # LLM + tool setup
@@ -45,25 +47,55 @@ _tools_by_name = {t.name: t for t in _tools}
 _llm_with_tools = _main_llm.bind_tools(_tools)
 _max_iter : int = 6 # number of iteration that data query is allowed to run
 
-def _run_tool_loop(messages: list, state: dict, max_iterations: int = 6) -> str:
+def _run_tool_loop(state: AgentState , enriched_query:str, max_iterations: int = 6) -> str:
     """Synchronous tool-calling loop. Returns the final text response.
 
     `state` is merged into each tool call's args so tools annotated with
     InjectedState receive it -- that annotation is only auto-filled by
     LangGraph's ToolNode, which this hand-rolled loop doesn't use.
     """
-    msgs = list(messages)
+    import pandas as pd
+    
+
+    df = get_df()
+    state["current_query"] = enriched_query
+
+    # Build df_context for system prompt
+    df_cols = state.get("df_columns") or []
+    head = df.head(6).to_dict(orient="records") if isinstance(df, pd.DataFrame) else []
+    tail = df.tail(6).to_dict(orient="records") if isinstance(df, pd.DataFrame) else []
+    df_context = {
+        "columns": df_cols,
+        "x_field": state.get("x_field"),
+        "y_field": state.get("y_field"),
+        "head": head,
+        "tail": tail,
+    }
+
+    iters_left = max_iterations
+    # Build message list: system prompt (placeholder, filled in each loop iteration) + prior conversation + new query
+    msgs_for_llm = [SystemMessage(content="")] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
     for _ in range(max_iterations):
-        response = _llm_with_tools.invoke(msgs)
-        msgs.append(response)
+        # Rebuild the system prompt each iteration so the LLM knows how many iterations remain
+        msgs_for_llm[0] = SystemMessage(content=get_data_query_system_prompt(
+            json.dumps(df_context),
+            iters_left,
+            data_name=state.get("data_name") or state.get("active_layer") or "the current dataset",
+            x_field=state.get("x_field") or "x-axis",
+            y_field=state.get("y_field") or "y-axis",
+            df=df,
+            vega_lite_schema=state.get("vega_lite_schema")
+            
+        ))
+        response = _llm_with_tools.invoke(msgs_for_llm)
+        msgs_for_llm.append(response)
         if not response.tool_calls:
-            # print("messages from tool loop",msgs)
             return response.content or ""
         for tc in response.tool_calls:
-            result = _tools_by_name[tc["name"]].invoke({**tc["args"], "state": state}) 
-            msgs.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    # print("messages from tool loop",msgs)
-    return msgs[-1].content or ""
+            result = _tools_by_name[tc["name"]].invoke({**tc["args"], "state": state})
+            msgs_for_llm.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+        iters_left -= 1
+    return msgs_for_llm[-1].content or ""
 
 
 # =============================================================================
@@ -338,10 +370,6 @@ def data_query_node(state: AgentState) -> dict:
     Enriches the query with touch/highlight context, runs the inline tool loop,
     then post-processes the response.
     """
-    import pandas as pd
-    from .context import get_df
-    df = get_df()
-
     query = state.get("current_query", "")
     print(f"[data_query_node] intent={state.get('current_intent')!r}")
     touchdata = state.get("touchdata", {})
@@ -372,32 +400,9 @@ def data_query_node(state: AgentState) -> dict:
         best_nv = _pick_best_node_values(highlight_nodes)
         if best_nv:
             patch_referents["last_referent_node_values"] = best_nv
-    state["current_query"] = enriched_query
 
-    # Build df_context for system prompt
-    df_cols = state.get("df_columns") or []
-    head = df.head(6).to_dict(orient="records") if isinstance(df, pd.DataFrame) else []
-    tail = df.tail(6).to_dict(orient="records") if isinstance(df, pd.DataFrame) else []
-    df_context = {
-        "columns": df_cols,
-        "x_field": state.get("x_field"),
-        "y_field": state.get("y_field"),
-        "head": head,
-        "tail": tail,
-    }
+    response_text = _run_tool_loop(state=state, enriched_query=enriched_query)
 
-    # Build message list: system prompt + prior conversation + new query
-    system_msg = SystemMessage(content=get_data_query_system_prompt(
-        json.dumps(df_context),
-        data_name=state.get("data_name") or state.get("active_layer") or "the current dataset",
-        x_field=state.get("x_field") or "x-axis",
-        y_field=state.get("y_field") or "y-axis",
-        df=df,
-        max_iter=_max_iter
-    ))
-    messages_for_llm = [system_msg] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
-
-    response_text = _run_tool_loop(messages_for_llm, state)
     print(f"response from tool loop: \n {response_text}")
     # Post-processing
     response_text = strip_markdown(response_text)
@@ -406,8 +411,10 @@ def data_query_node(state: AgentState) -> dict:
         response_text = rewritten
 
     extracted_nodes = extract_highlighted_data_points(
-        response_text, df,
-        state.get("x_field"), state.get("y_field"),
+        response_text=response_text,
+        df=get_df(),
+        x_col=state.get("x_field"), 
+        y_col=state.get("y_field"),
         color_col=state.get("color_field"),
     )
     print(f"[data_query_node] response={response_text!r}")
