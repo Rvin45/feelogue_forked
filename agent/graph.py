@@ -4,10 +4,11 @@ Replaces the old orchestrator + minimal graph with a full StateGraph
 where every LLM call has access to persistent conversation history.
 """
 import time
+import pandas as pd
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 
 from .config import OPENAI_MODEL, OPENAI_MODEL_ANALYSIS, OPENAI_MODEL_IMAGE
@@ -18,15 +19,13 @@ from .intent import classify_query
 from .prompts import (
     get_data_query_system_prompt,
     get_chart_overview_prompt,
+    get_operations_query_system_prompt,
     IMAGE_ANALYSIS_SYSTEM_PROMPT,
     CHART_OVERVIEW_SYSTEM_PROMPT,
 )
 from .chart_loader import analyze_user_intent_with_context
-from .operations import (
-    build_operation_ack,
-    build_operations_rtd_command,
-    resolve_operation_targets_to_values,
-)
+from .operations import parse_operation_response, build_operation_ack
+from .schema import OPERATIONS_SCHEMA
 from .postprocessing import (
     extract_highlighted_data_points,
     rewrite_long_node_lists_with_gpt,
@@ -34,7 +33,7 @@ from .postprocessing import (
 )
 from .touch_context import collect_touch_nodes, collect_highlight_nodes, _pick_best_node_values
 from .utils import strip_markdown
-from .context import get_df
+from .context import get_df, get_df_context
 
 
 # =============================================================================
@@ -47,47 +46,25 @@ _tools_by_name = {t.name: t for t in _tools}
 _llm_with_tools = _main_llm.bind_tools(_tools)
 _max_iter : int = 6 # number of iteration that data query is allowed to run
 
-def _run_tool_loop(state: AgentState , enriched_query:str, max_iterations: int = 6) -> str:
-    """Synchronous tool-calling loop. Returns the final text response.
-
-    `state` is merged into each tool call's args so tools annotated with
-    InjectedState receive it -- that annotation is only auto-filled by
-    LangGraph's ToolNode, which this hand-rolled loop doesn't use.
-    """
-    import pandas as pd
-    
-
-    df = get_df()
-    state["current_query"] = enriched_query
-
-    # Build df_context for system prompt
-    df_cols = state.get("df_columns") or []
-    n = len(df) if isinstance(df, pd.DataFrame) else 0
-
-    if n <= 10:  # head + tail would cover everything anyway
-        sample = {
-            "note": "COMPLETE - these are ALL the rows; no hidden data",
-            "rows": df.to_dict(orient="records") if n else [],
-        }
-    else:
-        sample = {
-            "note": "TRIMMED - first and last 5 rows only; more data hidden in between",
-            "head": df.head(5).to_dict(orient="records"),
-            "tail": df.tail(5).to_dict(orient="records"),
-        }
-
-    df_context = {
-        "schema": {
-            "n_rows": n,
-            "columns": df_cols,
-            "x_field": state.get("x_field"),
-            "y_field": state.get("y_field"),
-            "color_field": state.get("color_field"),
-        },
-        "sample_rows": sample,
+# Operations shares the same tools + underlying model, but also enforces a
+# schema-conforming final answer (see OPERATIONS_SCHEMA) so the loop's own
+# terminal message -- not a separate extraction call -- is the operation
+# command (plus a spoken message/clarifying question). Combining tools with
+# response_format=json_schema requires the bound tools to be `strict` too,
+# hence a separate strict-mode binding rather than reusing _llm_with_tools.
+_llm_ops = _main_llm.bind_tools(_tools, strict=True).bind(
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "operation_command", "schema": OPERATIONS_SCHEMA},
     }
-    # Build the stable system prompt once - never mutate it so the prompt cache prefix stays intact.
-    stable_system_prompt = SystemMessage(content=get_data_query_system_prompt(
+)
+_ops_max_iter: int = 4 # operations rarely need many tool round-trips
+
+
+def _build_data_query_system_prompt(state: AgentState, df) -> SystemMessage:
+    """Build the stable data-query system prompt - never mutated so the prompt cache prefix stays intact."""
+    df_context = get_df_context(df=df, state=state)
+    return SystemMessage(content=get_data_query_system_prompt(
         df_context,
         data_name=state.get("data_name") or state.get("active_layer") or "the current dataset",
         x_field=state.get("x_field") or "x-axis",
@@ -96,7 +73,30 @@ def _run_tool_loop(state: AgentState , enriched_query:str, max_iterations: int =
         df=df,
         vega_lite_schema=state.get("vega_lite_schema"),
     ))
-    msgs_for_llm = [stable_system_prompt] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
+
+
+def _run_tool_loop(
+    state: AgentState,
+    enriched_query: str,
+    system_prompt: SystemMessage,
+    max_iterations: int = 6,
+    llm=_llm_with_tools,
+) -> str:
+    """Synchronous tool-calling loop. Returns the final text response.
+
+    `state` is merged into each tool call's args so tools annotated with
+    InjectedState receive it -- that annotation is only auto-filled by
+    LangGraph's ToolNode, which this hand-rolled loop doesn't use.
+
+    `system_prompt` is built once by the caller and never mutated here, so the
+    prompt cache prefix stays intact across turns.
+
+    `llm` defaults to the plain tool-bound model (data_query_node's case);
+    callers that need a schema-conforming final answer (operations_node) pass
+    `_llm_ops`, which also enforces response_format on top of the same tools.
+    """
+    state["current_query"] = enriched_query
+    msgs_for_llm = [system_prompt] + list(state.get("messages", [])) + [HumanMessage(content=enriched_query)]
 
     iters_left = max_iterations
     for _ in range(max_iterations):
@@ -107,7 +107,7 @@ def _run_tool_loop(state: AgentState , enriched_query:str, max_iterations: int =
         else:
             budget_content = f"Iterations remaining: {iters_left - 1}. Break down the problem and evaluate each step carefully."
         budget_msg = SystemMessage(content=budget_content)
-        response = _llm_with_tools.invoke(msgs_for_llm + [budget_msg])
+        response = llm.invoke(msgs_for_llm + [budget_msg])
         msgs_for_llm.append(response)
         if not response.tool_calls:
             return response.content or ""
@@ -116,6 +116,49 @@ def _run_tool_loop(state: AgentState , enriched_query:str, max_iterations: int =
             msgs_for_llm.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
         iters_left -= 1
     return msgs_for_llm[-1].content or ""
+
+
+def _enrich_query_with_referents(state: AgentState, query: str) -> tuple[str, dict]:
+    """
+    Enrich `query` with touch/highlight context text, and compute the shared
+    state-patch fields (touch_used/highlight_used/touch_nodes/highlight_nodes
+    plus deictic memory) used by both data_query_node and operations_node.
+
+    Returns (enriched_query, patch).
+    """
+    touchdata = state.get("touchdata", {})
+    highlighted_context = state.get("highlighted_context", {})
+
+    touch_info, touch_nodes = collect_touch_nodes(touchdata)
+    highlight_info, highlight_nodes = collect_highlight_nodes(highlighted_context)
+    use_touch = len(touch_nodes) > 0
+    use_highlight = len(highlight_nodes) > 0
+
+    referent_parts = []
+    if use_touch:
+        referent_parts.extend(touch_info)
+    if use_highlight:
+        referent_parts.extend(highlight_info)
+
+    enriched_query = f"{query} ({'; '.join(referent_parts)})" if referent_parts else query
+
+    patch = {
+        "touch_used": use_touch,
+        "highlight_used": use_highlight,
+        "touch_nodes": touch_nodes if use_touch else {},
+        "highlight_nodes": highlight_nodes if use_highlight else {},
+    }
+    if use_touch:
+        best_nv = _pick_best_node_values(touch_nodes)
+        if best_nv:
+            patch["last_touch_node_values"] = best_nv
+            patch["last_referent_node_values"] = best_nv
+    elif use_highlight:
+        best_nv = _pick_best_node_values(highlight_nodes)
+        if best_nv:
+            patch["last_referent_node_values"] = best_nv
+
+    return enriched_query, patch
 
 
 # =============================================================================
@@ -284,37 +327,57 @@ def image_analysis_node(state: AgentState) -> dict:
 # =============================================================================
 
 def operations_node(state: AgentState) -> dict:
-    """Extract and resolve a chart operation (zoom, pan, layer switch)."""
+    """Resolve a chart operation (zoom, reset, pan, filter) via the operations tool loop.
+
+    Reuses the same touch/highlight enrichment and tool-calling loop as
+    data_query_node, but bound to _llm_ops so the loop's own terminal message
+    is a schema-conforming operation command (see OPERATIONS_SCHEMA) rather
+    than free text needing separate extraction.
+    """
     print(f"[operations_node]")
-    from .context import get_df
+    query = state.get("current_query", "")
+    enriched_query, referent_patch = _enrich_query_with_referents(state, query)
     df = get_df()
-    x_col = state.get("x_field")
-    y_col = state.get("y_field")
-
-    x_values = None
-    if df is not None and x_col and x_col in df.columns:
-        x_values = df[x_col].astype(str).tolist()
-
-    rtd_cmd = build_operations_rtd_command(
-        user_query=state.get("current_query", ""),
-        touch_context=state.get("touchdata", {}),
-        highlighted_context=state.get("highlighted_context", {}),
-        x_values=x_values,
+    system_prompt = SystemMessage(content=get_operations_query_system_prompt(
+        df_context=get_df_context(df=df, state=state),
+        data_name=state.get("data_name") or state.get("active_layer") or "the current dataset",
+        x_field=state.get("x_field"),
+        y_field=state.get("y_field"),
+        color_field=state.get("color_field")
+    ))
+    raw = _run_tool_loop(
+        state=state,
+        enriched_query=enriched_query,
+        system_prompt=system_prompt,
+        max_iterations=_ops_max_iter,
+        llm=_llm_ops,
     )
-    rtd_cmd = resolve_operation_targets_to_values(
-        user_query=state.get("current_query", ""),
-        rtd_cmd=rtd_cmd,
-        df=df,
-        x_col=x_col,
-        y_col=y_col,
-    )
-    ack = build_operation_ack(rtd_cmd)
-    print(rtd_cmd)
+    result = parse_operation_response(raw)
+    print(result)
+
+    if result.get("clarification_needed"):
+        return {
+            "intent_responses": {state["current_intent"]: result.get("message") or "Could you clarify what you'd like me to do?"},
+            "rtd_command": None,
+            "followup_stage": True,
+            "followup_topic": "operations",
+            **referent_patch,
+        }
+
+    rtd_cmd = {
+        "operation": result.get("operation"),
+        "target": result.get("target"),
+        "factor": result.get("factor"),
+    }
+    # The model's own `message` is the primary spoken ack; fall back to a
+    # deterministic ack built from rtd_cmd only if it's missing/empty.
+    ack = result.get("message") or build_operation_ack(rtd_cmd)
     return {
         "intent_responses": {state["current_intent"]: ack},
         "rtd_command": rtd_cmd,
         "followup_stage": False,
-
+        "followup_topic": None,
+        **referent_patch,
     }
 
 
@@ -392,37 +455,12 @@ def data_query_node(state: AgentState) -> dict:
     """
     query = state.get("current_query", "")
     print(f"[data_query_node] intent={state.get('current_intent')!r}")
-    touchdata = state.get("touchdata", {})
-    highlighted_context = state.get("highlighted_context", {})
+    enriched_query, referent_patch = _enrich_query_with_referents(state, query)
 
-    # Touch & highlight referent enrichment
-    touch_info, touch_nodes = collect_touch_nodes(touchdata)
-    highlight_info, highlight_nodes = collect_highlight_nodes(highlighted_context)
-    use_touch = len(touch_nodes) > 0
-    use_highlight = len(highlight_nodes) > 0
-
-    referent_parts = []
-    if use_touch:
-        referent_parts.extend(touch_info)
-    if use_highlight:
-        referent_parts.extend(highlight_info)
-
-    enriched_query = f"{query} ({'; '.join(referent_parts)})" if referent_parts else query
-
-    # Persist best referent for future deictic ops
-    patch_referents = {}
-    if use_touch:
-        best_nv = _pick_best_node_values(touch_nodes)
-        if best_nv:
-            patch_referents["last_touch_node_values"] = best_nv
-            patch_referents["last_referent_node_values"] = best_nv
-    elif use_highlight:
-        best_nv = _pick_best_node_values(highlight_nodes)
-        if best_nv:
-            patch_referents["last_referent_node_values"] = best_nv
+    system_prompt = _build_data_query_system_prompt(state, get_df())
 
     start_time = time.perf_counter()
-    response_text = _run_tool_loop(state=state, enriched_query=enriched_query)
+    response_text = _run_tool_loop(state=state, enriched_query=enriched_query, system_prompt=system_prompt)
     elapsed = time.perf_counter() - start_time
     print(f"[data_query_node] resolved in {elapsed:.2f}s (intent={state.get('current_intent')!r})")
 
@@ -445,12 +483,8 @@ def data_query_node(state: AgentState) -> dict:
     return {
         "intent_responses": {state["current_intent"]: response_text},
         "nodes": extracted_nodes or {},
-        "touch_used": use_touch,
-        "highlight_used": use_highlight,
-        "touch_nodes": touch_nodes if use_touch else {},
-        "highlight_nodes": highlight_nodes if use_highlight else {},
         "followup_stage": False,
-        **patch_referents,
+        **referent_patch,
     }
 
 

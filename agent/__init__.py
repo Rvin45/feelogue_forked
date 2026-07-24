@@ -16,12 +16,10 @@ from .intent import classify_query, classify_intent, detect_deictic_reference
 from .touch_context import (
     collect_touch_nodes,
     collect_highlight_nodes,
-    pick_best_referent_node,
 )
 
 from .operations import (
-    build_operations_rtd_command,
-    resolve_operation_targets_to_values,
+    parse_operation_response,
     build_operation_ack,
 )
 
@@ -54,10 +52,8 @@ __all__ = [
     # Touch
     "collect_touch_nodes",
     "collect_highlight_nodes",
-    "pick_best_referent_node",
     # Operations
-    "build_operations_rtd_command",
-    "resolve_operation_targets_to_values",
+    "parse_operation_response",
     "build_operation_ack",
     # Data
     "csv_query_tool",

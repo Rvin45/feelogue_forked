@@ -7,7 +7,7 @@ checkpoints because pandas objects can't be serialized by MemorySaver)
 and the current thread ID used to address the graph checkpoint.
 """
 import pandas as pd
-
+from .state import AgentState
 # Module-level DataFrame ref -- never put into AgentState
 _df: pd.DataFrame | None = None
 
@@ -103,3 +103,31 @@ def update_dataframe_from_layer(msg: dict) -> dict:
 
     print(f"DataFrame updated: {len(df)} rows, columns: {list(df.columns)}")
     return metadata_patch
+
+
+def get_df_context(df:pd.DataFrame, state:AgentState):
+    df_cols = state.get("df_columns") or []
+    n = len(df) if isinstance(df, pd.DataFrame) else 0
+    if n <= 10:  # head + tail would cover everything anyway
+        sample = {
+            "note": "COMPLETE - these are ALL the rows; no hidden data",
+            "rows": df.to_dict(orient="records") if n else [],
+        }
+    else:
+        sample = {
+            "note": "TRIMMED - first and last 5 rows only; more data hidden in between",
+            "head": df.head(5).to_dict(orient="records"),
+            "tail": df.tail(5).to_dict(orient="records"),
+        }
+
+    df_context = {
+        "schema": {
+            "n_rows": n,
+            "columns": df_cols,
+            "x_field": state.get("x_field"),
+            "y_field": state.get("y_field"),
+            "color_field": state.get("color_field"),
+        },
+        "sample_rows": sample,
+    }
+    return df_context

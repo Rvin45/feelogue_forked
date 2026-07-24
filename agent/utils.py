@@ -112,25 +112,6 @@ def _extract_single_x_value(user_query: str):
     return None
 
 
-def _extract_pan_numeric_factor(user_query: str) -> Optional[int]:
-    """
-    Extract pan factor from query.
-    - "pan left 150%" -> 150
-    - "pan left 200"  -> 200
-    """
-    q = user_query or ""
-    m = re.search(r"\b(\d{2,3})\s*%\b", q)
-    if m:
-        return int(m.group(1))
-
-    # only accept bare numbers if the utterance is clearly a pan instruction
-    m = re.search(r"\bpan\b.*?\b(\d{2,3})\b", q, re.I)
-    if m:
-        return int(m.group(1))
-
-    return None
-
-
 def _extract_bulleted_items(text: str):
     """Extract bulleted list items from text."""
     lines = text.splitlines()
@@ -268,3 +249,5 @@ def trim_schema_data(schema : dict, n : int=5) -> dict:
 
     trimmed_schema["data"]["values"] = head + removed + tail
     return trimmed_schema
+
+
