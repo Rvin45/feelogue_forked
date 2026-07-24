@@ -35,6 +35,11 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _to_native(val):
+    """Convert a numpy/pandas scalar to a native, JSON-serializable Python type."""
+    return val.item() if hasattr(val, "item") else val
+
+
 def _stringify(v) -> str:
     """Convert value to string, handling None and floats."""
     if v is None:

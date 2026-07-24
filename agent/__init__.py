@@ -29,7 +29,7 @@ from .chart_loader import analyze_user_intent_with_context
 
 from .postprocessing import (
     rewrite_long_node_lists_with_gpt,
-    extract_highlighted_data_points,
+    parse_data_query_response,
 )
 
 from .graph import graph
@@ -61,7 +61,7 @@ __all__ = [
     "analyze_user_intent_with_context",
     # Post-processing
     "rewrite_long_node_lists_with_gpt",
-    "extract_highlighted_data_points",
+    "parse_data_query_response",
     # Graph
     "graph",
     # Orchestrator

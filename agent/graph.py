@@ -25,14 +25,14 @@ from .prompts import (
 )
 from .chart_loader import analyze_user_intent_with_context
 from .operations import parse_operation_response, build_operation_ack
-from .schema import OPERATIONS_SCHEMA
+from .schema import OPERATIONS_SCHEMA, DATA_QUERY_SCHEMA
 from .postprocessing import (
-    extract_highlighted_data_points,
+    parse_data_query_response,
     rewrite_long_node_lists_with_gpt,
     combine_multi_intent_responses,
 )
 from .touch_context import collect_touch_nodes, collect_highlight_nodes, _pick_best_node_values
-from .utils import strip_markdown
+from .utils import strip_markdown, _to_native
 from .context import get_df, get_df_context
 
 
@@ -59,6 +59,16 @@ _llm_ops = _main_llm.bind_tools(_tools, strict=True).bind(
     }
 )
 _ops_max_iter: int = 4 # operations rarely need many tool round-trips
+
+# Data-query loop is similarly bound to a schema-conforming response so the
+# loop's own terminal message carries both the spoken answer and the
+# highlighted `_id`(s) it's anchored to -- no separate extraction call needed.
+_llm_data_query = _main_llm.bind_tools(_tools, strict=True).bind(
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "data_query_response", "schema": DATA_QUERY_SCHEMA},
+    }
+)
 
 
 def _build_data_query_system_prompt(state: AgentState, df) -> SystemMessage:
@@ -457,32 +467,54 @@ def data_query_node(state: AgentState) -> dict:
     print(f"[data_query_node] intent={state.get('current_intent')!r}")
     enriched_query, referent_patch = _enrich_query_with_referents(state, query)
 
-    system_prompt = _build_data_query_system_prompt(state, get_df())
+    df = get_df()
+    system_prompt = _build_data_query_system_prompt(state, df)
 
     start_time = time.perf_counter()
-    response_text = _run_tool_loop(state=state, enriched_query=enriched_query, system_prompt=system_prompt)
+    raw = _run_tool_loop(
+        state=state,
+        enriched_query=enriched_query,
+        system_prompt=system_prompt,
+        llm=_llm_data_query,
+    )
     elapsed = time.perf_counter() - start_time
     print(f"[data_query_node] resolved in {elapsed:.2f}s (intent={state.get('current_intent')!r})")
 
-    print(f"response from tool loop: \n {response_text}")
+    print(f"response from tool loop: \n {raw}")
+    result = parse_data_query_response(raw)
+
     # Post-processing
-    response_text = strip_markdown(response_text)
+    response_text = strip_markdown(result.get("message") or "")
     rewritten = rewrite_long_node_lists_with_gpt(response_text)
     if rewritten != response_text:
         response_text = rewritten
 
-    extracted_nodes = extract_highlighted_data_points(
-        response_text=response_text,
-        df=get_df(),
-        x_col=state.get("x_field"), 
-        y_col=state.get("y_field"),
-        color_col=state.get("color_field"),
-    )
-    print(f"[data_query_node] response={response_text!r}")
+    # Only trust ids the model actually saw on the live dataframe -- guards
+    # against hallucinated ids and against `_id` not existing yet. x/y ride
+    # along on each node for traceability back to the chart.
+    highlighted_ids = result.get("highlighted_ids") or []
+    nodes = {}
+    if highlighted_ids and df is not None and "_id" in df.columns:
+        id_str = df["_id"].astype(str)
+        x_field = state.get("x_field")
+        y_field = state.get("y_field")
+        for hid in highlighted_ids:
+            matches = df[id_str == str(hid)]
+            if matches.empty:
+                continue
+            row = matches.iloc[0]
+            node = {"_id": str(hid)}
+            if x_field and x_field in df.columns:
+                node["x"] = _to_native(row[x_field])
+            if y_field and y_field in df.columns:
+                node["y"] = _to_native(row[y_field])
+            nodes[str(hid)] = node
+
+    print(f"[data_query_node] response={response_text!r} nodes={nodes!r}")
 
     return {
         "intent_responses": {state["current_intent"]: response_text},
-        "nodes": extracted_nodes or {},
+        "nodes": nodes,
         "followup_stage": False,
         **referent_patch,
     }

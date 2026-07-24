@@ -167,3 +167,35 @@ OPERATIONS_SCHEMA = {
                  "clarification_needed", "message"],
     "additionalProperties": False
 }
+
+
+# Structured extraction for data-query answers (data_analysis, trend,
+# touch_interaction, general_question intents). Lets the model itself decide,
+# in the same call that produces the spoken answer, which data point(s) (by
+# `_id`) the answer is anchored to -- avoiding a separate guesswork LLM call.
+DATA_QUERY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "message": {
+            "type": "string",
+            "description": (
+                "The spoken answer to the user's question -- same content/style "
+                "rules as before (concise, TTS-friendly, no markdown)."
+            )
+        },
+        "highlighted_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "The _id value(s) of the specific data point(s) this answer is "
+                "anchored to (e.g. the row behind a max/min/specific-date "
+                "answer), drawn ONLY from _id values seen in tool results or "
+                "the data context -- never invented. Empty array when the "
+                "answer doesn't tie to specific point(s) (e.g. a general/"
+                "aggregate statement)."
+            )
+        }
+    },
+    "required": ["message", "highlighted_ids"],
+    "additionalProperties": False
+}

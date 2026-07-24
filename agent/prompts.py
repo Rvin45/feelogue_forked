@@ -584,6 +584,17 @@ Use them to resolve implicit references - e.g. pronouns ("it", "that"), follow-u
     if has_hidden:
         prompt += "\n**Data Scope**:\n- Some data points are currently hidden on the chart. Use only visible=True rows when answering. Do not mention visibility in your response.\n"
 
+    if df is not None and "_id" in df.columns:
+        prompt += (
+            "\n**Highlighting (`highlighted_ids`)**:\n"
+            "- Populate `highlighted_ids` with the `_id`(s) of the row(s) this "
+            "answer is anchored to (e.g. the row behind a max/min/specific-date "
+            "answer or comparison) - drawn ONLY from `_id` values seen in tool "
+            "results or the data sample, never invented.\n"
+            "- Leave `highlighted_ids` empty for aggregate/general answers that "
+            "aren't tied to specific point(s).\n"
+        )
+
     if color_field:
         prompt += (
             f"\n**Series column: `{color_field}`**\n"
@@ -1207,72 +1218,6 @@ IMAGE_ANALYSIS_SYSTEM_PROMPT = (
     "Use simple color names. Use qualifiers like 'around' or 'roughly' when estimating. "
     "Example: Two lines intersect around 2021 near a value of 50 from the image."
 ).strip()
-
-
-# =============================================================================
-# Highlight Extraction
-# =============================================================================
-
-
-def get_highlight_extraction_prompt(
-    response_text: str,
-    x_values: list,
-    color_col: str | None = None,
-    series_values: list | None = None,
-) -> str:
-    """
-    Prompt to extract which data points the LLM referenced in its response.
-    Returns a prompt asking for a JSON array of x-values (or x+series pairs).
-    """
-    x_values_str = ", ".join(
-        str(v) for v in x_values[:50]
-    )  # Limit to prevent huge prompts
-
-    if color_col and series_values:
-        series_str = ", ".join(str(v) for v in series_values[:30])
-        return f"""Given this response about a dataset:
-
-RESPONSE: "{response_text}"
-
-The dataset has these x-axis values: [{x_values_str}]
-The dataset also has a series/category column called "{color_col}" with these values: [{series_str}]
-
-Which data points from the dataset are specifically mentioned or referenced in the response?
-Return a JSON array of objects, each with "x" and optionally "{color_col}" keys.
-If the response mentions a specific series, include it. If the response mentions only an x-value without specifying a series, omit the "{color_col}" key for that entry.
-If no specific data points were referenced, return an empty array [].
-
-CRITICAL: You MUST return values EXACTLY as they appear in the lists above.
-
-Examples:
-- Response mentions "Electronics had the highest sales in Q4" -> [{{"x": "Q4", "{color_col}": "Electronics"}}]
-- Response mentions "Q4 had the highest total" -> [{{"x": "Q4"}}]
-- Response mentions "the average was 3.5" (no specific point) -> []
-- Response mentions "the average for the Memory series is 503.57" (aggregate, no specific x-value cited) -> []
-
-Return only the JSON array, no explanation."""
-
-    return f"""Given this response about a dataset:
-
-RESPONSE: "{response_text}"
-
-The dataset has these x-axis values: [{x_values_str}]
-
-Which x-axis values from the dataset are specifically mentioned or referenced in the response?
-Return ONLY a JSON array of the matching x-values.
-If no specific data points were referenced, return an empty array [].
-
-CRITICAL: You MUST return values EXACTLY as they appear in the x-axis values list above.
-Do not abbreviate, shorten, or reformat them. Copy them character-for-character.
-For example, if the list contains "2024/Q1" and the response mentions "Q1 2024", return ["2024/Q1"] -- not ["Q1 2024"] or ["Q1"].
-
-Examples:
-- Response mentions "Q1 2024 had the highest", x-values include "2024/Q1" -> ["2024/Q1"]
-- Response mentions "2020 and 2021 were similar", x-values include "2020", "2021" -> ["2020", "2021"]
-- Response mentions "the average was 3.5" (no specific point) -> []
-
-Return only the JSON array, no explanation."""
-
 
 
 def get_load_chart_system_prompt() -> str:

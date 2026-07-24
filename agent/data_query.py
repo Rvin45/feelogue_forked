@@ -129,6 +129,9 @@ def csv_query_tool(
         if "visible" in df.columns and not df["visible"].all() and "visible" not in columns_to_use:
             columns_to_use.append("visible")
 
+        if "_id" in df.columns and "_id" not in columns_to_use:
+            columns_to_use.append("_id")
+
         selected_data = df[columns_to_use]
         executor = _get_executor(df, selected_data, columns_to_use, state)
 
